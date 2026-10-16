@@ -512,6 +512,12 @@ const parsePackage = (
     name: optionalString(value.name),
     version: optionalString(value.version),
     main: optionalString(value.main),
+    main_status:
+      value.main === undefined || value.main === ""
+        ? "default"
+        : typeof value.main === "string"
+          ? "declared"
+          : "invalid",
     renderer:
       optionalString(value.renderer) ??
       optionalString(value.browser) ??
@@ -538,6 +544,7 @@ const unavailablePackage = (
   name: null,
   version: null,
   main: null,
+  main_status: "unavailable",
   renderer: null,
   limitation,
 });

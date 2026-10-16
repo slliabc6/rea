@@ -26,11 +26,18 @@ export const analyzeJavaScriptDirectory = async (
   surface: "CLI" | "stdio MCP",
   cli: TestCli,
   root: string,
+  sourcePaths: readonly string[] = [],
 ) => {
   let document: unknown;
   if (surface === "CLI") {
     const response = await cli.run({
-      arguments: ["analyze-javascript-application", root, "--format", "json"],
+      arguments: [
+        "analyze-javascript-application",
+        root,
+        ...sourcePaths.flatMap((path) => ["--source-path", path]),
+        "--format",
+        "json",
+      ],
       environment: { REA_LOG_LEVEL: "silent" },
     });
     expect(response.exitCode, response.stderr).toBe(0);
@@ -40,6 +47,7 @@ export const analyzeJavaScriptDirectory = async (
     const response = await call("analyze_javascript_application", {
       input_path: root,
       format: "directory",
+      ...(sourcePaths.length === 0 ? {} : { source_paths: sourcePaths }),
     });
     expect(response.isError, JSON.stringify(response)).not.toBe(true);
     document = response.structuredContent;

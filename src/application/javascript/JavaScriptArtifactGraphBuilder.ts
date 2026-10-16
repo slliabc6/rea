@@ -12,6 +12,8 @@ import {
   HTML_INLINE_SCRIPT_LOCATION_COVERAGE_LIMIT,
   omittedHtmlInlineScriptLocations,
   selfReferenceOmissions,
+  dependencyManifest,
+  applicationContainerIdentity,
   type JavaScriptArtifactGraphContext,
 } from "./JavaScriptArtifactGraphContext.js";
 import {
@@ -93,6 +95,40 @@ function* buildJavaScriptArtifactGraphInputSteps(
 ): Generator<void, unknown> {
   const accumulator = new JavaScriptArtifactGraphAccumulator();
   const root = createJavaScriptArtifactRootNode(accumulator, snapshot);
+  const parsedPackages = new Set(
+    analysis.packages
+      .filter(
+        (metadata) =>
+          metadata.status === "included" && metadata.main_status !== "invalid",
+      )
+      .map(({ path }) => path),
+  );
+  const applicationOwnershipUnknownContainers = new Set<string>();
+  for (const files of [fileSet.files, fileSet.unavailable_relevant_files]) {
+    for (const file of files) {
+      if (
+        (file.kind === "package-json" &&
+          !dependencyManifest(file.path) &&
+          !parsedPackages.has(file.path)) ||
+        (file.kind === "javascript" &&
+          (!("text" in file) || !file.text.included))
+      )
+        applicationOwnershipUnknownContainers.add(
+          applicationContainerIdentity(fileSet, file),
+        );
+    }
+  }
+  // Omitted module relationships can hide another launch owner. Do not expand
+  // retained facts beyond the projection guard merely to recover ownership.
+  for (const analyzed of analysis.files) {
+    if (
+      analyzed.application_projection_failure !== undefined ||
+      analyzed.analysis_failure !== undefined
+    )
+      applicationOwnershipUnknownContainers.add(
+        applicationContainerIdentity(fileSet, analyzed.file),
+      );
+  }
   const context: JavaScriptArtifactGraphContext = {
     accumulator,
     snapshot,
@@ -112,6 +148,8 @@ function* buildJavaScriptArtifactGraphInputSteps(
     chunkNodes: new Map(),
     moduleNodes: new Map(),
     containerNodes: new Map([[snapshot.manifest.root_sha256, root]]),
+    applicationRootsBySource: new Map(),
+    applicationOwnershipUnknownContainers,
   };
   addJavaScriptArtifactContainers(context);
   yield;

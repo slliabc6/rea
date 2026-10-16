@@ -235,16 +235,20 @@ const hasOwnedArtifactPath = (node: ApplicationNode): boolean =>
       typeof observation.properties.resolved_path === "string",
   );
 
-// loadFile receives a raw literal here: the syntax producer does not retain
-// computed __dirname expressions. Electron resolves this relative to the app
-// root, so its source-relative inference is not an owned runtime target.
+// A resolved application-root observation owns its artifact path. Unresolved
+// declarations still need captured host syntax; legacy source-relative
+// inferences do not establish an owned runtime target.
 const isRawApplicationFileObservation = (
   observation: ApplicationNode["observations"][number],
 ): boolean =>
-  observation.properties.resolution_context === "filesystem-expression" &&
-  typeof observation.properties.mechanism === "string" &&
-  observation.properties.mechanism.startsWith("call:") &&
-  observation.properties.mechanism.endsWith("loadFile");
+  observation.properties.runtime_path_base === "application-root"
+    ? observation.properties.resolution_status !== "resolved" ||
+      typeof observation.properties.resolved_path !== "string"
+    : // Compatibility for captures reconstructed before the producer retained its base.
+      observation.properties.resolution_context === "filesystem-expression" &&
+      typeof observation.properties.mechanism === "string" &&
+      observation.properties.mechanism.startsWith("call:") &&
+      observation.properties.mechanism.endsWith("loadFile");
 
 const usesApplicationFileDeclaration = (node: ApplicationNode): boolean =>
   node.kind === "electron-renderer" &&

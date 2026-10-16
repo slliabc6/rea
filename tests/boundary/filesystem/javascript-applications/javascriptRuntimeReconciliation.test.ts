@@ -728,6 +728,37 @@ it.skipIf(process.platform === "win32")(
   },
 );
 
+it("matches a resolved nested application path without an operator mapping", async () => {
+  const root = await createTestTempDirectory("rea-owned-loadfile-runtime-");
+  await mkdir(join(root, "app", "dist"), { recursive: true });
+  await mkdir(join(root, "dist"), { recursive: true });
+  await writeFile(
+    join(root, "app", "package.json"),
+    JSON.stringify({ main: "main.cjs" }),
+  );
+  await writeFile(
+    join(root, "app", "main.cjs"),
+    "const { BrowserWindow } = require('electron'); const win = new BrowserWindow(); win.loadFile('dist/index.html');",
+  );
+  await writeFile(
+    join(root, "app", "dist", "index.html"),
+    "application target",
+  );
+  await writeFile(join(root, "dist", "index.html"), "root decoy");
+  const analysis = await analyzeFixture(root);
+  const reconcileTarget = (path: string) =>
+    reconcileInput({
+      static_layers: [{ analysis, role: "application" }],
+      runtime_observations: [rendererCapture(root, path)],
+    }).reconciliations.find(({ entity_kind }) => entity_kind === "target");
+  expect(
+    reconcileTarget(join(root, "app", "dist", "index.html")),
+  ).toMatchObject({ status: "matched" });
+  expect(reconcileTarget(join(root, "dist", "index.html"))).toMatchObject({
+    status: "unmatched",
+  });
+});
+
 it("keeps a raw nested loadFile target application-relative when the producer also resolves a nested decoy", async () => {
   const root = await createTestTempDirectory("rea-raw-loadfile-ownership-");
   await mkdir(join(root, "dist"));

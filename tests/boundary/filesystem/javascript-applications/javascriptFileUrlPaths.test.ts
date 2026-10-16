@@ -12,6 +12,7 @@ import { analyzeJavaScriptApplication } from "../../../support/javascriptApplica
 
 const urlCases = [
   ["./preload%20name.cjs", "preload name.cjs", "main.mjs"],
+  ["./preload%252Fname.cjs", "preload%2Fname.cjs", "main.mjs"],
   ["./pr%C3%A9load.cjs", "préload.cjs", "main.mjs"],
   ["./preload%3F%23.cjs", "preload?#.cjs", "main.mjs"],
   ["./preload.cjs?cache=1#v2", "preload.cjs", "main.mjs"],
@@ -60,7 +61,7 @@ describe("JavaScript file URL paths", () => {
       expect(await readFile(nativePath, "utf8")).toContain("real preload");
       await writeFile(
         sourceFile,
-        `import { fileURLToPath } from "node:url";\nnew BrowserWindow({ webPreferences: { preload: fileURLToPath(new URL(${JSON.stringify(reference)}, import.meta.url)) } });\n`,
+        `import { fileURLToPath } from "node:url";\nimport { BrowserWindow } from "electron";\nnew BrowserWindow({ webPreferences: { preload: fileURLToPath(new URL(${JSON.stringify(reference)}, import.meta.url)) } });\n`,
       );
 
       const result = await analyzeJavaScriptApplication({
@@ -85,7 +86,7 @@ describe("JavaScript file URL paths", () => {
     },
   );
 
-  it("resolves a decoded literal file URL at the filesystem boundary", async () => {
+  it("keeps a decoded absolute file URL unmapped without host ownership", async () => {
     const root = await createTestTempDirectory("rea-literal-file-url-");
     await mkdir(join(root, "app"), { recursive: true });
     await writeFile(
@@ -109,10 +110,16 @@ describe("JavaScript file URL paths", () => {
     expect(preload?.observations).not.toHaveLength(0);
     for (const observation of preload?.observations ?? [])
       expect(observation.properties).toMatchObject({
-        resolved_path: "app/preload name.cjs",
-        resolution_status: "resolved",
+        resolved_path: null,
+        resolution_status: "unavailable",
         resolution_context: "filesystem-expression",
       });
+    expect(
+      graph.edges.filter(
+        ({ source_node_id, relation }) =>
+          source_node_id === preload?.node_id && relation === "maps_to",
+      ),
+    ).toEqual([]);
   });
 
   it.each(unknownExpressions)("leaves unsupported %s unknown", (expression) => {

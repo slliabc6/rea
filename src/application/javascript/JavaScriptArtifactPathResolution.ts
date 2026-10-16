@@ -46,6 +46,7 @@ type UnresolvedArtifactPathStatus =
 
 interface ArtifactPathResolutionBase {
   readonly declared_path: string;
+  readonly runtime_path_base?: "application-root";
   readonly resolution_context: ArtifactPathResolutionContext;
   readonly limitations: readonly string[];
   readonly conditional_resolutions?: readonly ConditionalModuleResolution[];
@@ -87,7 +88,13 @@ export interface ResolveArtifactPathInput {
   /** Import/require semantics; runtime resource paths omit this provenance. */
   readonly moduleKind?: JavaScriptModuleResolutionMode;
   /** Runtime paths retain their loader owner independently of source imports. */
-  readonly runtimePathKind?: "exact-file" | "node-entrypoint" | "url-resource";
+  readonly runtimePathKind?:
+    | "exact-file"
+    | "application-file"
+    | "node-entrypoint"
+    | "url-resource";
+  /** Logical root of an inventoried nested application container. */
+  readonly applicationRootPath?: string | null;
 }
 
 /** Preserve an explicitly retained loader mode on graph relationships. */
@@ -193,6 +200,9 @@ export const resolveArtifactPathByContext = (
   const resolution = resolvePath(input);
   const facts = {
     declared_path: input.declaredPath,
+    ...(input.runtimePathKind === "application-file"
+      ? { runtime_path_base: "application-root" as const }
+      : {}),
     resolution_context: input.context,
     limitations: resolution.limitations,
     ...(resolution.candidatePath === undefined
@@ -215,6 +225,9 @@ export const resolveArtifactPathByContext = (
 export const artifactPathResolutionProperties = (
   resolution: ArtifactPathResolution | undefined,
 ): Readonly<Record<string, JsonValue>> => ({
+  ...(resolution?.runtime_path_base === undefined
+    ? {}
+    : { runtime_path_base: resolution.runtime_path_base }),
   ...(resolution?.candidate_path === undefined
     ? {}
     : { candidate_path: resolution.candidate_path }),
@@ -249,6 +262,18 @@ const conditionalResolution = (
 });
 
 const resolvePath = (input: ResolveArtifactPathInput): CandidateResolution => {
+  if (
+    input.runtimePathKind !== undefined &&
+    input.runtimePathKind !== "url-resource" &&
+    posix.isAbsolute(input.declaredPath) &&
+    !looksExternal(input.declaredPath)
+  )
+    return (
+      rejectDeclaration(input.declaredPath, declaresLiteralPercent(input)) ??
+      unresolvedCandidate("unavailable", [
+        "An absolute runtime host path has no established mapping to the selected logical artifact root.",
+      ])
+    );
   if (input.runtimePathKind === "node-entrypoint")
     return resolveNodeRuntimeEntrypoint(input);
   if (input.moduleKind === "compiler-dependent") {
@@ -286,7 +311,11 @@ const resolvePath = (input: ResolveArtifactPathInput): CandidateResolution => {
   }
   if (input.runtimePathKind === "url-resource")
     return resolveExactUrlResource(input);
-  if (input.runtimePathKind === "exact-file" && isRuntimePathDeclaration(input))
+  if (
+    (input.runtimePathKind === "exact-file" ||
+      input.runtimePathKind === "application-file") &&
+    isRuntimePathDeclaration(input)
+  )
     return resolveRuntimeEntrypoint(input);
   // Package import keys are literal lookup identities, not artifact paths.
   // The selected target is admitted separately by resolveExportTarget.
@@ -386,14 +415,33 @@ const resolveNodeRuntimeEntrypoint = (
 const resolveRuntimeEntrypoint = (
   input: ResolveArtifactPathInput,
 ): CandidateResolution => {
-  const rejected = rejectDeclaration(input.declaredPath);
+  const rejected = rejectDeclaration(
+    input.declaredPath,
+    declaresLiteralPercent(input),
+  );
   if (rejected !== null) return rejected;
   if (hasScheme(input.declaredPath) || looksExternal(input.declaredPath))
     return unresolvedCandidate("external", [
       "Electron runtime entrypoints must identify local paths, not external URLs.",
     ]);
+  if (
+    input.runtimePathKind === "application-file" &&
+    input.applicationRootPath === null
+  )
+    return unresolvedCandidate("unavailable", [
+      "Inventoried package metadata does not establish one application root for this source; the loadFile base is unknown.",
+    ]);
+  const relative = confineCandidate(
+    relativeCandidate(
+      input.runtimePathKind === "application-file" ? "" : input.sourcePath,
+      input.declaredPath,
+    ),
+  );
+  if (typeof relative !== "string") return relative;
   const candidate = confineCandidate(
-    relativeCandidate(input.sourcePath, input.declaredPath),
+    input.runtimePathKind === "application-file"
+      ? posix.join(input.applicationRootPath ?? "", relative)
+      : relative,
   );
   if (typeof candidate !== "string") return candidate;
   return (
@@ -453,14 +501,19 @@ const rejectDeclaration = (
 };
 
 /**
- * Node's CommonJS loader never percent-decodes a request or a legacy package
- * main, so `%2e` and `%2f` there are literal filename bytes, not encoded dots
- * or separators. Root confinement still applies to the joined candidate.
+ * Filesystem expressions, exact runtime paths, and CommonJS requests retain
+ * literal filename bytes. URL-to-path conversion belongs to the producer;
+ * these consumers must not decode or reject the resulting percent spelling.
+ * Root confinement still applies to the joined candidate.
  */
 const declaresLiteralPercent = (input: ResolveArtifactPathInput): boolean =>
-  input.moduleKind === "require" &&
-  (input.context === "module-specifier" ||
-    input.context === "package-entrypoint");
+  input.context === "filesystem-expression" ||
+  (input.runtimePathKind === "exact-file" &&
+    isRuntimePathDeclaration(input) &&
+    !looksExternal(input.declaredPath)) ||
+  (input.moduleKind === "require" &&
+    (input.context === "module-specifier" ||
+      input.context === "package-entrypoint"));
 
 const contextualCandidate = (
   input: ResolveArtifactPathInput,

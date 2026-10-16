@@ -62,6 +62,7 @@ it("uses the first structured observation when paths repeat", async () => {
         {
           ...packageObservation,
           status: "invalid",
+          main_status: "unavailable",
           name: null,
           version: null,
           main: null,

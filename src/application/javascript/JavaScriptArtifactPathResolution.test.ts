@@ -2850,6 +2850,167 @@ it.each(["require", "import"] as const)(
   },
 );
 
+describe("literal-percent runtime path resolution", () => {
+  it.each([
+    ["exact-file", "filesystem-expression"],
+    ["exact-file", "module-specifier"],
+    ["node-entrypoint", "filesystem-expression"],
+  ] as const)(
+    "preserves literal percent bytes for %s in %s",
+    (runtimePathKind, context) => {
+      const declaredPath = "./preload%2F%5C%2E.cjs";
+      expect(
+        resolve({
+          declaredPath,
+          sourcePath: "app/main.cjs",
+          context,
+          runtimePathKind,
+          files: fileMap([
+            file("app/main.cjs", "root"),
+            file("app/preload%2F%5C%2E.cjs", "root"),
+            file("app/preload/entry.cjs", "root"),
+          ]),
+        }),
+      ).toMatchObject({
+        declared_path: declaredPath,
+        resolution_context: context,
+        resolution_status: "resolved",
+        resolved_path: "app/preload%2F%5C%2E.cjs",
+        limitations: [],
+      });
+    },
+  );
+
+  it("keeps a file URL's decoded percent bytes literal at runtime lookup", () => {
+    const analysis = analyzeJavaScriptStaticSource(`
+      import { BrowserWindow } from "electron";
+      import { fileURLToPath } from "node:url";
+      new BrowserWindow({ webPreferences: {
+        preload: fileURLToPath(new URL("./preload%252Fname.cjs", import.meta.url))
+      }});
+    `);
+    const preload = analysis.role_paths.find(({ role }) => role === "preload");
+    if (preload === undefined)
+      throw new Error("Expected a static preload path");
+    expect(analysis.parse_status).toBe("complete");
+    expect(preload).toMatchObject({
+      path: "./preload%2Fname.cjs",
+      resolution_context: "filesystem-expression",
+    });
+    expect(
+      resolve({
+        declaredPath: preload.path,
+        sourcePath: "app/main.mjs",
+        context: preload.resolution_context,
+        runtimePathKind: "exact-file",
+        files: fileMap([
+          file("app/main.mjs", "root"),
+          file("app/preload%2Fname.cjs", "root"),
+          file("app/preload/name.cjs", "root"),
+          file("app/preload%252Fname.cjs", "root"),
+        ]),
+      }),
+    ).toMatchObject({
+      declared_path: "./preload%2Fname.cjs",
+      resolution_status: "resolved",
+      resolved_path: "app/preload%2Fname.cjs",
+      limitations: [],
+    });
+  });
+
+  it.each(["exact-file", "node-entrypoint"] as const)(
+    "confines literal-percent filesystem paths for %s",
+    (runtimePathKind) => {
+      expect(
+        resolve({
+          declaredPath: "../../outside%2Fname.cjs",
+          sourcePath: "app/main.cjs",
+          context: "filesystem-expression",
+          runtimePathKind,
+          files: fileMap([
+            file("app/main.cjs", "root"),
+            file("outside%2Fname.cjs", "root"),
+          ]),
+        }),
+      ).toMatchObject({
+        resolution_status: "rejected",
+        resolved_path: null,
+        limitations: [
+          expect.stringContaining("escapes the canonical artifact root"),
+        ],
+      });
+    },
+  );
+
+  it.each(["%2F", "%5C"])(
+    "keeps %s rejected in a URL-owned runtime resource",
+    (separator) => {
+      expect(
+        resolve({
+          declaredPath: `file:///app/preload${separator}name.cjs`,
+          sourcePath: "app/main.cjs",
+          context: "module-specifier",
+          runtimePathKind: "url-resource",
+          files: fileMap([
+            file("app/main.cjs", "root"),
+            file(`app/preload${separator}name.cjs`, "root"),
+            file("app/preload/name.cjs", "root"),
+          ]),
+        }),
+      ).toMatchObject({
+        resolution_status: "rejected",
+        resolved_path: null,
+      });
+    },
+  );
+});
+
+describe("application-root Electron loadFile resolution", () => {
+  it.each(["", "resources/app.asar"])(
+    "resolves loadFile within application root %j instead of the calling script",
+    (applicationRootPath) => {
+      const prefix =
+        applicationRootPath === "" ? "" : `${applicationRootPath}/`;
+      const files = fileMap([
+        file(`${prefix}sub/main.cjs`, "app"),
+        file(`${prefix}dist%2Findex.html`, "app"),
+        file(`${prefix}sub/dist%2Findex.html`, "app"),
+        file(`${prefix}sub/absent.html`, "app"),
+        file(`${prefix}fallback/index.html`, "app"),
+        file(`${prefix}foreign.html`, "other-container"),
+        file("outside.html", "other-container"),
+      ]);
+      const loadFile = (declaredPath: string) =>
+        resolve({
+          declaredPath,
+          sourcePath: `${prefix}sub/main.cjs`,
+          context: "filesystem-expression",
+          runtimePathKind: "application-file",
+          applicationRootPath,
+          files,
+        });
+      expect(loadFile("dist%2Findex.html")).toMatchObject({
+        runtime_path_base: "application-root",
+        resolved_path: `${prefix}dist%2Findex.html`,
+        resolution_status: "resolved",
+      });
+      expect(loadFile("/dist%2Findex.html")).toMatchObject({
+        resolved_path: null,
+        resolution_status: "unavailable",
+      });
+      for (const path of ["absent.html", "fallback", "foreign.html"])
+        expect(loadFile(path)).toMatchObject({
+          resolved_path: null,
+          resolution_status: "not-found",
+        });
+      expect(loadFile("../outside.html")).toMatchObject({
+        resolved_path: null,
+        resolution_status: "rejected",
+      });
+    },
+  );
+});
+
 describe("exact Electron runtime entrypoint resolution", () => {
   it("requires a protocol for Electron URL resources", () => {
     const files = fileMap([

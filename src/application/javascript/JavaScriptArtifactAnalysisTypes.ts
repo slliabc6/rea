@@ -20,6 +20,7 @@ interface JavaScriptPackageValues {
   readonly name: string | null;
   readonly version: string | null;
   readonly main: string | null;
+  readonly main_status: "default" | "declared" | "invalid";
   readonly renderer: string | null;
 }
 
@@ -35,6 +36,7 @@ export type JavaScriptPackageObservation = JavaScriptStructuredObservation &
         readonly name: null;
         readonly version: null;
         readonly main: null;
+        readonly main_status: "unavailable";
         readonly renderer: null;
         readonly limitation: string;
       }
