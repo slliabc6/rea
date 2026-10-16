@@ -1,5 +1,6 @@
 import type { FileHandle } from "node:fs/promises";
 
+import { err, ok, type Result } from "../domain/result.js";
 import { OwnedFileHandle } from "./OwnedFileHandle.js";
 import { openRegularFile, RegularFileAdmissionFailure } from "./RegularFile.js";
 
@@ -68,14 +69,23 @@ export const withOwnedRegularFile = async <Value>(
   } catch (cause: unknown) {
     outcome = { kind: "failed", cause };
   }
+  let cleanup: Result<void, unknown>;
   try {
     await owner.close();
+    cleanup = ok(undefined);
   } catch (cleanupCause: unknown) {
+    cleanup = err(cleanupCause);
+  }
+  // Cleanup is part of the operation. Preserve an existing read failure, but
+  // observe cancellation before either publishing success or retaining a close.
+  if (outcome.kind === "completed" && options.signal?.aborted === true)
+    outcome = { kind: "failed", cause: options.signal.reason };
+  if (!cleanup.ok) {
     throw new RegularFileCleanupFailure(
       path,
       owner,
       outcome,
-      cleanupCause,
+      cleanup.error,
       retainOwner(options.retainFailedClose, owner),
     );
   }

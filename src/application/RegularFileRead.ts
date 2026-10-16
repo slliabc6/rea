@@ -67,12 +67,6 @@ export const withRegularFile = async <Value>(
   path: string,
   read: (handle: FileHandle, stats: Stats) => Promise<Value>,
   options: RegularFileReadOptions = {},
-): Promise<Value> => withRegularFileOwned(path, read, options);
-
-const withRegularFileOwned = async <Value>(
-  path: string,
-  read: (handle: FileHandle, stats: Stats) => Promise<Value>,
-  options: RegularFileReadOptions,
 ): Promise<Value> => {
   const { signal, resources } = options;
   const operation = async () => {
@@ -112,7 +106,13 @@ const withRegularFileOwned = async <Value>(
       return retry.outcome.value;
     }
   };
-  return resources === undefined ? operation() : resources.run(operation);
+  const value = await (resources === undefined
+    ? operation()
+    : resources.run(operation));
+  // A retained close may have recovered after the descriptor owner's outcome
+  // was captured. Include that retry and the scope's finalization in cancellation.
+  signal?.throwIfAborted();
+  return value;
 };
 
 /** Admit a regular file without waiting for a pipe, then read its verified handle. */
