@@ -53,6 +53,7 @@ import { artifactCliEvidence, artifactMcpResult } from "./lib/artifact-e2e.mjs";
 import { verifyScenarioEnvironment } from "./lib/browser-scenario-environment-e2e.mjs";
 import { verifyScenarioStorage } from "./lib/browser-scenario-storage-e2e.mjs";
 import { verifyScenarioServiceWorkers } from "./lib/browser-scenario-service-workers-e2e.mjs";
+import { verifyBrowserScenarioViews } from "./lib/browser-scenario-view-e2e.mjs";
 
 const SCENARIO_SECRET_VALUE = "rea-browser-verifier-secret";
 const SCENARIO_URL_SECRET_VALUE = "rea-browser-url-verifier-secret";
@@ -336,6 +337,8 @@ try {
     executable,
     site.origin,
   );
+  process.stderr.write("Browser verifier: scenario step views\n");
+  const scenarioViews = await verifyBrowserScenarioViews(executable);
   const scenarioResults = JSON.stringify([
     attachedScenario,
     launchedScenario.value,
@@ -410,6 +413,7 @@ try {
     browserScenarioAttachCleanup: "disconnected-external",
     browserScenarioLaunchCleanup: "terminated-owned-process",
     scenarioFailure,
+    scenarioViews,
     scenarioEnvironment,
     scenarioStorage,
     scenarioServiceWorkers,

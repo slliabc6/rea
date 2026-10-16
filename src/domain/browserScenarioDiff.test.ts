@@ -12,6 +12,10 @@ import {
   type BrowserScenarioCapture,
 } from "./browserScenarioCapture.js";
 import { DEFAULT_BROWSER_SCENARIO_CAPTURE_LIMITS } from "./browserScenarioCaptureLimits.js";
+import {
+  browserScenarioFixtureCapture,
+  scenarioFixtureCompleteness,
+} from "./browserScenarioCapture.fixture.js";
 
 const noEventOmissions = {
   by_kind: [],
@@ -216,7 +220,8 @@ it("reports event-family selection mismatch as unknown", () => {
   ).toBe(false);
 
   const quiet = browserScenarioCaptureSchema.parse({
-    ...withFamilies(consoleOnly, []),
+    ...consoleOnly,
+    scenario: { ...consoleOnly.scenario, event_families: [] },
     events: { retained: 0, dropped: 0, items: [], omissions: noEventOmissions },
   });
   const differentEvents = compare(quiet, widened);
@@ -283,6 +288,7 @@ const concurrentCapture = (
   ).map((event, index) => ({ ...event, sequence: index + 1 }));
   return browserScenarioCaptureSchema.parse({
     ...base,
+    scenario: { ...base.scenario, event_families: ["network"] },
     events: {
       items: events,
       retained: events.length,
@@ -343,6 +349,7 @@ const redirectChainCapture = (swapLeaves = false, reverseReceipt = false) => {
     .map((event, index) => ({ ...event, sequence: index + 1 }));
   return browserScenarioCaptureSchema.parse({
     ...base,
+    scenario: { ...base.scenario, event_families: ["network"] },
     events: {
       items: events,
       retained: events.length,
@@ -351,6 +358,101 @@ const redirectChainCapture = (swapLeaves = false, reverseReceipt = false) => {
     },
   });
 };
+
+it("keeps every incomparable artifact's states, captured-side digest and reason", () => {
+  const before = browserScenarioFixtureCapture();
+  const screenshotBytes = Buffer.from("iVBORw==", "base64");
+  const afterSteps = before.steps.map((step) => {
+    if (step.step_index === 1)
+      return {
+        ...step,
+        artifacts: {
+          ...step.artifacts,
+          accessibility: {
+            state: "truncated",
+            observed: 900,
+            retained: 0,
+            reason: "accessibility text exceeded its budget",
+          },
+        },
+        completeness: {
+          status: "truncated",
+          equality_eligible: false,
+          missing_sections: [],
+          truncated_sections: ["accessibility"],
+        },
+      };
+    // A URL captured before but missing after stays unknown.
+    if (step.step_index === 2)
+      return {
+        ...step,
+        artifacts: {
+          ...step.artifacts,
+          url: { state: "missing", reason: "URL capture failed" },
+          screenshot: {
+            state: "captured",
+            value: {
+              sha256: createHash("sha256")
+                .update(screenshotBytes)
+                .digest("hex"),
+              bytes: screenshotBytes.byteLength,
+              media_type: "image/png",
+              data_base64: "iVBORw==",
+            },
+          },
+        },
+        completeness: {
+          status: "incomplete",
+          equality_eligible: false,
+          missing_sections: ["url"],
+          truncated_sections: [],
+        },
+      };
+    return step;
+  });
+  const after = browserScenarioCaptureSchema.parse({
+    ...structuredClone(before),
+    steps: afterSteps,
+    completeness: scenarioFixtureCompleteness(afterSteps),
+  });
+  const digest = expect.stringMatching(/^[a-f0-9]{64}$/u);
+  const unknown = (
+    artifact: string,
+    beforeState: string,
+    afterState: string,
+    sides: { readonly before?: unknown; readonly after?: unknown } = {},
+  ) => ({
+    artifact,
+    status: "unknown",
+    before_state: beforeState,
+    after_state: afterState,
+    before_sha256: sides.before ?? null,
+    after_sha256: sides.after ?? null,
+    reason: `Artifact coverage is not comparable (${beforeState} before, ${afterState} after).`,
+  });
+  const steps = compareBrowserScenarios({
+    before_scenario: before,
+    after_scenario: after,
+    normalization: { rules: [] },
+  }).steps;
+
+  expect(steps.map(({ artifact_diffs: diffs }) => diffs)).toEqual([
+    [],
+    [unknown("accessibility", "captured", "truncated", { before: digest })],
+    [
+      unknown("screenshot", "not_requested", "captured", { after: digest }),
+      unknown("url", "captured", "missing", { before: digest }),
+    ],
+    // A failed step lists the action section as missing on both sides.
+    [unknown("action_state", "missing", "missing")],
+    [
+      unknown("action_state", "missing", "missing"),
+      unknown("screenshot", "missing", "missing"),
+      unknown("accessibility", "missing", "missing"),
+      unknown("url", "missing", "missing"),
+    ],
+  ]);
+});
 
 describe("browser scenario network event order", () => {
   it("retains multi-hop redirect ancestry while ignoring IDs and concurrent receipt order", () => {
@@ -956,7 +1058,7 @@ const scenarioCapture = (
       {
         step_index: 0,
         step_id: "scenario_start",
-        action: "scenario_start",
+        action: "goto_start",
         status: "completed",
         elapsed_ms: 0,
         before_url: url,

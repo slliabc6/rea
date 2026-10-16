@@ -118,6 +118,13 @@ import {
   dartAotViewRequestSchema,
   dartAotViewContextSchema,
 } from "./dartAotView.js";
+import {
+  browserScenarioSummarySchema,
+  browserScenarioViewContextSchema,
+  browserScenarioViewPageSchema,
+  browserScenarioViewRequestSchema,
+} from "./browserScenarioViewSchemas.js";
+import { projectBrowserScenarioView } from "./browserScenarioView.js";
 
 const summaryViewSchema = z.strictObject({ kind: z.literal("summary") });
 const facetViewSchema = z.strictObject({
@@ -241,6 +248,7 @@ export const analysisViewRequestSchema = z.discriminatedUnion("kind", [
   qlogViewRequestSchema,
   pcapViewRequestSchema,
   dartAotViewRequestSchema,
+  browserScenarioViewRequestSchema,
 ]);
 
 // The application owns admission and authenticated Evidence parsing. SDK and
@@ -361,6 +369,7 @@ const viewResultBase = {
     "inspect_android_package",
     "inspect_pcap_capture",
     "inspect_dart_aot",
+    "capture_browser_scenario",
   ]),
   parent_digest: digestSchema,
   view_digest: digestSchema,
@@ -515,6 +524,7 @@ export const analysisViewResultSchema = z.discriminatedUnion("kind", [
       androidPackageSummarySchema,
       pcapSummarySchema,
       dartAotSummarySchema,
+      browserScenarioSummarySchema,
     ]),
   }),
   z.strictObject({
@@ -628,6 +638,14 @@ export const analysisViewResultSchema = z.discriminatedUnion("kind", [
     parent_operation: z.literal("inspect_dart_aot"),
   }),
   z.strictObject({
+    kind: z.literal("browser-scenario"),
+    view: browserScenarioViewRequestSchema,
+    page: browserScenarioViewPageSchema,
+    ...viewResultBase,
+    ...browserScenarioViewContextSchema.shape,
+    parent_operation: z.literal("capture_browser_scenario"),
+  }),
+  z.strictObject({
     kind: z.literal("inventory"),
     view: inventoryViewSchema,
     manifest: artifactGraphManifestSchema,
@@ -724,6 +742,10 @@ export type UnsignedAnalysisView =
   | Omit<
       Extract<AnalysisViewResult, { readonly kind: "dart-aot" }>,
       "view_digest"
+    >
+  | Omit<
+      Extract<AnalysisViewResult, { readonly kind: "browser-scenario" }>,
+      "view_digest"
     >;
 
 /** Attach the content digest that must change when projected bytes change. */
@@ -769,7 +791,7 @@ const unsupportedParent = (
   new AnalysisUnsupportedTargetError(
     INSPECT_ANALYSIS_VIEW_OPERATION,
     parentArtifactPath(parent),
-    `Parent Evidence operation ${JSON.stringify(parent.operation)} does not support analysis views. Use completed binary layout, JavaScript application, native function, artifact inventory/inspection, WASM, Mach-O, Interface Builder, EVM, managed artifact or member, Android package, Dart AOT, or web network capture Evidence.`,
+    `Parent Evidence operation ${JSON.stringify(parent.operation)} does not support analysis views. Use completed binary layout, JavaScript application, native function, artifact inventory/inspection, WASM, Mach-O, Interface Builder, EVM, managed artifact or member, Android package, Dart AOT, web network capture, or browser scenario capture Evidence.`,
   );
 
 const parentArtifactPath = (parent: AnalysisViewParent): string => {
@@ -805,6 +827,7 @@ const retainedViewProjectors = new Map<string, typeof projectWasmArtifactView>([
   ["inspect_dart_aot", projectDartAotView],
   ["inspect_artifact", projectArtifactInventoryView],
   ["inventory_artifact", projectArtifactInventoryView],
+  ["capture_browser_scenario", projectBrowserScenarioView],
 ]);
 
 /** Project one selected view from authenticated parent analysis Evidence. */
