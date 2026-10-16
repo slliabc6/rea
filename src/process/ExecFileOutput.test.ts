@@ -29,6 +29,16 @@ const waitForFile = async (path: string): Promise<boolean> => {
 };
 
 describe("execFileOutput", () => {
+  it("attributes output to the launched process only when requested", async () => {
+    const args = ["-e", "process.stdout.write(String(process.pid))"];
+    const observed = await execFileOutput(process.execPath, args, {
+      captureProcessId: true,
+    });
+    expect(observed.processId).toBe(Number(observed.stdout));
+    const ordinary = await execFileOutput(process.execPath, args);
+    expect(ordinary).not.toHaveProperty("processId");
+  });
+
   it("ignores non-Error and incomplete failure metadata", () => {
     expect(execFileOutputFailure("failure")).toBeUndefined();
     expect(execFileOutputFailure(new Error("failure"))).toBeUndefined();

@@ -101,6 +101,54 @@ describe("owned process-group cleanup validation: ownership and lineage", () => 
       reason: "process lineage contains an unowned or PID-reused process",
     });
   });
+});
+
+describe("owned process missing-token observations", () => {
+  it.each(["alive", "zombie"])(
+    "shares missing-token classification across group and lineage observation for a %s child",
+    async (state) => {
+      const child = { ...launcher, pid: 101, parentPid: launcher.pid };
+      const adapter = (): ProcessOwnershipHost => ({
+        listProcesses: vi
+          .fn<ProcessOwnershipHost["listProcesses"]>()
+          .mockResolvedValueOnce([launcher, child])
+          .mockResolvedValue([
+            launcher,
+            { ...child, state: state === "alive" ? "S" : "Z" },
+          ]),
+        environment: async (pid) =>
+          pid === launcher.pid ? { REA_PROCESS_RUN_ID: ownership.runId } : {},
+        signalGroup: vi.fn(),
+      });
+      const groups = await observeOwnedProcessGroups(
+        ownership.runId,
+        [launcher.processGroupId],
+        adapter(),
+      );
+      const lineage = await observeOwnedProcessLineage(ownership, adapter());
+      if (state === "alive") {
+        expect(groups.get(launcher.processGroupId)).toEqual({
+          state: "unverifiable",
+          reason:
+            "process ownership could not be revalidated for PID 101: run_token_missing",
+        });
+        expect(lineage).toMatchObject({
+          status: "unavailable",
+          reason:
+            "process ownership could not be revalidated for PID 101: run_token_missing",
+        });
+      } else {
+        expect(groups.get(launcher.processGroupId)).toEqual({ state: "alive" });
+        expect(lineage).toMatchObject({
+          status: "verified",
+          lineage: { descendants: [] },
+        });
+      }
+    },
+  );
+});
+
+describe("owned process foreign-token validation", () => {
   it("fails closed for stale metadata or an unrelated concurrent process", async () => {
     const { adapter, signalGroup } = host({
       100: { REA_PROCESS_RUN_ID: "run-token" },
@@ -152,6 +200,112 @@ describe("owned process-group cleanup validation: ownership and lineage", () => 
     });
     expect(signalGroup).not.toHaveBeenCalled();
   });
+});
+
+describe("owned process-group missing-token exit races", () => {
+  it.each(["owned", "foreign"])(
+    "revalidates a surviving %s peer after another member loses its token and exits",
+    async (peer) => {
+      const exiting = { ...launcher, pid: 101, parentPid: launcher.pid };
+      const survivor = { ...launcher, pid: 102, parentPid: launcher.pid };
+      const listProcesses = vi
+        .fn<ProcessOwnershipHost["listProcesses"]>()
+        .mockResolvedValueOnce([launcher, exiting, survivor])
+        .mockResolvedValue([launcher, { ...exiting, state: "Z" }, survivor]);
+      const signalGroup = vi.fn();
+      const result = await cleanupOwnedProcessGroup(ownership, {
+        listProcesses,
+        environment: async (pid) =>
+          pid === exiting.pid
+            ? {}
+            : {
+                REA_PROCESS_RUN_ID:
+                  pid === survivor.pid && peer === "foreign"
+                    ? "other-run"
+                    : ownership.runId,
+              },
+        signalGroup,
+      });
+      if (peer === "foreign") {
+        expect(result).toEqual({
+          cleaned: false,
+          reason: "process ownership token mismatch for PID(s): 102",
+          failures: [{ pid: 102, reason: "run-token-mismatch" }],
+        });
+        expect(signalGroup).not.toHaveBeenCalled();
+      } else {
+        expect(result).toEqual({ cleaned: true, signaled: true });
+        expect(signalGroup).toHaveBeenCalledExactlyOnceWith(
+          launcher.processGroupId,
+          "SIGKILL",
+        );
+      }
+    },
+  );
+
+  it.each(["planning", "signaling"])(
+    "settles a missing token after confirmed exit during %s",
+    async (phase) => {
+      for (const remaining of [[], [{ ...launcher, state: "Z" }]]) {
+        const listProcesses = vi
+          .fn<ProcessOwnershipHost["listProcesses"]>()
+          .mockResolvedValueOnce([launcher]);
+        if (phase === "signaling")
+          listProcesses.mockResolvedValueOnce([launcher]);
+        listProcesses.mockResolvedValue(remaining);
+        const environment = vi.fn<ProcessOwnershipHost["environment"]>();
+        if (phase === "signaling")
+          environment.mockResolvedValueOnce({
+            REA_PROCESS_RUN_ID: ownership.runId,
+          });
+        environment.mockResolvedValue({});
+        const signalGroup = vi.fn();
+
+        await expect(
+          cleanupOwnedProcessGroup(ownership, {
+            listProcesses,
+            environment,
+            signalGroup,
+          }),
+        ).resolves.toEqual({ cleaned: true, signaled: false });
+        expect(environment).toHaveBeenCalledTimes(phase === "planning" ? 1 : 2);
+        expect(signalGroup).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each(["alive", "recheck-unavailable"])(
+    "retains missing-token uncertainty when the process is %s",
+    async (state) => {
+      const listProcesses = vi
+        .fn<ProcessOwnershipHost["listProcesses"]>()
+        .mockResolvedValueOnce([launcher]);
+      if (state === "alive") listProcesses.mockResolvedValue([launcher]);
+      else listProcesses.mockRejectedValue(new Error("process table denied"));
+      const signalGroup = vi.fn();
+
+      await expect(
+        cleanupOwnedProcessGroup(ownership, {
+          listProcesses,
+          environment: async () => ({}),
+          signalGroup,
+        }),
+      ).resolves.toMatchObject({
+        cleaned: false,
+        failures: [
+          {
+            pid: launcher.pid,
+            reason: "environment-unreadable",
+            diagnostic:
+              state === "alive"
+                ? "run_token_missing"
+                : "run_token_missing; process liveness recheck failed: process table denied",
+          },
+        ],
+      });
+      expect(signalGroup).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("owned process-group cleanup liveness rechecks", () => {

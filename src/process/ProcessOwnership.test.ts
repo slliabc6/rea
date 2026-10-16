@@ -466,7 +466,7 @@ describe("withheld process evidence during cleanup", () => {
 });
 
 describe("sampled detached process groups during cleanup", () => {
-  it("signals only token-authenticated sampled groups and reports an unowned sample", async () => {
+  it("signals only token-authenticated sampled groups and reports a missing-token sample", async () => {
     const processes = [
       {
         pid: 100,
@@ -519,8 +519,15 @@ describe("sampled detached process groups during cleanup", () => {
 
     expect(result).toMatchObject({
       cleaned: false,
-      reason: "process ownership token mismatch for PID(s): 200",
-      failures: [{ pid: 200, reason: "run-token-mismatch" }],
+      reason:
+        "process ownership token could not be read for 1 live process(es): run_token_missing=1; live candidates 200=run_token_missing",
+      failures: [
+        {
+          pid: 200,
+          reason: "environment-unreadable",
+          diagnostic: "run_token_missing",
+        },
+      ],
     });
     expect(signalGroup).toHaveBeenCalledTimes(1);
     expect(signalGroup).toHaveBeenCalledWith(100, "SIGKILL");
@@ -557,8 +564,15 @@ describe("sampled detached process groups during cleanup", () => {
 
     expect(result).toMatchObject({
       cleaned: false,
-      reason: "process ownership token mismatch for PID(s): 200",
-      failures: [{ pid: 200, reason: "run-token-mismatch" }],
+      reason:
+        "process ownership token could not be read for 1 live process(es): run_token_missing=1; live candidates 200=run_token_missing",
+      failures: [
+        {
+          pid: 200,
+          reason: "environment-unreadable",
+          diagnostic: "run_token_missing",
+        },
+      ],
     });
     expect(signalGroup).not.toHaveBeenCalled();
   });

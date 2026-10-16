@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 
 import {
@@ -70,6 +71,7 @@ export const createTestCli = (
         cwd: cwd ?? process.cwd(),
         env: {
           PATH: process.env.PATH ?? "",
+          REA_PROCESS_RUN_ID: randomUUID(),
           // Native Windows APIs need the system root and a writable temporary
           // directory even when the command's application environment is empty.
           ...(process.platform === "win32"

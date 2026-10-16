@@ -187,7 +187,7 @@ itWithCaptureCapability(
           cli.kill("SIGKILL");
         await closed;
       });
-      expect(await closed).toBe(cancel ? 130 : 0);
+      expect(await closed, stdout).toBe(cancel ? 130 : 0);
       const marker = z
         .object({ path: z.string(), removed: z.literal(true) })
         .parse(JSON.parse(await readFile(cleanupMarker, "utf8")));

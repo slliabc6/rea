@@ -431,9 +431,9 @@ describe("process identity during token validation", () => {
           "process identity changed or became unavailable during token validation",
       })),
     });
-    // Initial observation, final token classification, then one fresh recheck
-    // shared by both changed identities.
-    expect(listProcesses).toHaveBeenCalledTimes(3);
+    // Initial observation, three bounded missing-token retries, final token
+    // classification, then one fresh recheck shared by both changed identities.
+    expect(listProcesses).toHaveBeenCalledTimes(6);
   });
 });
 

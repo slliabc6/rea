@@ -339,7 +339,7 @@ captureTest(
     expect(capture.exit.finalization?.signals).toHaveLength(1);
     expect(capture.settlement).toMatchObject({
       state: "alive_at_deadline",
-      cleanup_outcome: "cleaned",
+      cleanup_outcome: outcome.kind === "partial" ? "failed" : "cleaned",
     });
     expect(capture.frames.map(({ data }) => data).join("")).toContain(
       "finalized",

@@ -7,6 +7,20 @@ import type {
 const errorMessage = (cause: unknown): string =>
   cause instanceof Error ? cause.message : String(cause);
 
+/** Missing tokens establish uncertainty, not a positive foreign-run identity. */
+export const classifyProcessRunToken = (
+  observation: ProcessRunTokenObservation,
+  runId: string,
+):
+  | { readonly state: "owned" }
+  | { readonly state: "foreign" }
+  | { readonly state: "unavailable"; readonly reason: string } => {
+  if (observation.state === "unavailable") return observation;
+  if (observation.runId === undefined)
+    return { state: "unavailable", reason: "run_token_missing" };
+  return { state: observation.runId === runId ? "owned" : "foreign" };
+};
+
 /** Read only ownership tokens, using per-process fallback for missing batch rows. */
 export async function* readProcessRunTokens(
   host: ProcessOwnershipHost,

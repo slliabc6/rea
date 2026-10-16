@@ -71,7 +71,12 @@ it("keeps the shared browser scenario provider open when the SDK discards its di
     expect(scenarioClose).not.toHaveBeenCalled();
     expect(electronClose).not.toHaveBeenCalled();
 
-    await expect(transport.closeOptionalProviders()).rejects.toMatchObject({
+    const first = transport.closeOptionalProviders();
+    const concurrent = transport.closeOptionalProviders();
+    await expect(first).rejects.toMatchObject({
+      errors: [expect.objectContaining({ message: "Scenario cleanup failed" })],
+    });
+    await expect(concurrent).rejects.toMatchObject({
       errors: [expect.objectContaining({ message: "Scenario cleanup failed" })],
     });
     expect(browserClose).toHaveBeenCalledTimes(1);
@@ -83,6 +88,7 @@ it("keeps the shared browser scenario provider open when the SDK discards its di
     expect(scenarioClose).toHaveBeenCalledTimes(2);
     expect(electronClose).toHaveBeenCalledTimes(1);
   } finally {
+    await transport.closeOptionalProviders();
     await transport.closeAndroid();
     await session.close();
   }

@@ -1,4 +1,5 @@
 import { realpathSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { availableParallelism, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -135,7 +136,13 @@ const projects = TEST_PROJECTS.map((project) => {
 
 export default defineConfig({
   test: {
-    env: { TMPDIR: CANONICAL_TEMPORARY_DIRECTORY },
+    env: {
+      TMPDIR: CANONICAL_TEMPORARY_DIRECTORY,
+      // Worker processes and inherited fixture children belong to this test
+      // run, not to a sibling capture started after its baseline. Preserve
+      // explicitly selected tokens; capture providers still assign their own.
+      REA_PROCESS_RUN_ID: process.env.REA_PROCESS_RUN_ID ?? randomUUID(),
+    },
     maxWorkers: MAX_TEST_WORKERS,
     projects,
     ...(process.env.REA_CI_TEST_HISTORY

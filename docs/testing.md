@@ -98,6 +98,14 @@ isolated filesystem boundary tests because it loads both source and compiled
 module graphs. Adapter, other boundary, acceptance, and process-global projects
 retain per-file isolation. See `vitest.config.ts` for current settings.
 
+Test workers and their inherited fixture children carry a test-run ownership
+token. CLI and stdio MCP fixture launchers also label their owned processes when
+constructing an explicit environment. This lets concurrent captures recognize
+those peers as a different run instead of treating them as unidentified new
+children. Explicit caller tokens take precedence; capture providers assign their
+own tokens, and deliberately missing tokens remain unresolved. Unidentified host
+processes are not excluded by this fixture labeling.
+
 Inject producer faults through scoped dependencies in shared workers: a module
 mock cannot replace a consumer that was imported earlier. Check these tests
 with the consumer preloaded as well as alone. For simulated protocol traces,

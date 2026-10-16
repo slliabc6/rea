@@ -8,6 +8,8 @@ type ExecFileOutputOptions = Omit<
   "encoding" | "maxBuffer"
 > & {
   readonly maxBuffer?: number;
+  /** Attribute this invocation's output; never use it as post-exit ownership proof. */
+  readonly captureProcessId?: boolean;
   /**
    * Signal that stops the process on abort or timeout. The promise then
    * settles only after the process exits, so the caller can remove files it
@@ -124,9 +126,14 @@ export const execFileBytes = (
   command: string,
   arguments_: readonly string[],
   options: ExecFileOutputOptions = {},
-): Promise<{ readonly stdout: Buffer; readonly stderr: Buffer }> =>
+): Promise<{
+  readonly stdout: Buffer;
+  readonly stderr: Buffer;
+  readonly processId?: number;
+}> =>
   new Promise((resolve, reject) => {
-    const { stopSignal, signal, timeout, ...execOptions } = options;
+    const { stopSignal, signal, timeout, captureProcessId, ...execOptions } =
+      options;
     const invalid = timeout === undefined ? undefined : invalidTimeout(timeout);
     if (invalid !== undefined) {
       reject(invalid);
@@ -174,7 +181,13 @@ export const execFileBytes = (
           reject(failure);
           return;
         }
-        resolve({ stdout, stderr });
+        resolve({
+          stdout,
+          stderr,
+          ...(captureProcessId === true && child.pid !== undefined
+            ? { processId: child.pid }
+            : {}),
+        });
       },
     );
     // The first stop request names the failure; a later one is not resent.
@@ -205,10 +218,14 @@ export const execFileOutput = (
   readonly stderr: string;
   readonly stdoutBytes: number;
   readonly stderrBytes: number;
+  readonly processId?: number;
 }> =>
-  execFileBytes(command, arguments_, options).then(({ stdout, stderr }) => ({
-    stdout: stdout.toString("utf8"),
-    stderr: stderr.toString("utf8"),
-    stdoutBytes: stdout.byteLength,
-    stderrBytes: stderr.byteLength,
-  }));
+  execFileBytes(command, arguments_, options).then(
+    ({ stdout, stderr, processId }) => ({
+      stdout: stdout.toString("utf8"),
+      stderr: stderr.toString("utf8"),
+      stdoutBytes: stdout.byteLength,
+      stderrBytes: stderr.byteLength,
+      ...(processId === undefined ? {} : { processId }),
+    }),
+  );

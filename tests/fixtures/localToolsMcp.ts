@@ -5,6 +5,7 @@ import {
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import type { ValidateFunction } from "ajv";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { expect, onTestFinished } from "vitest";
 import { z } from "zod";
@@ -47,6 +48,10 @@ export async function connectLocalToolsMcp(
       PATH: process.env.PATH ?? "/usr/bin:/bin",
       REA_LOG_LEVEL: "silent",
       HOPPER_LAUNCHER_PATH: "/rea-unconfigured-deep-provider/hopper",
+      // The SDK owns this fixture server; sibling captures must see its
+      // distinct ownership token rather than mistake it for a missing-token
+      // post-baseline child. Explicit caller environment values take precedence.
+      REA_PROCESS_RUN_ID: randomUUID(),
       ...environment,
     },
     stderr: "pipe",

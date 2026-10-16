@@ -7,6 +7,34 @@ import { ProviderCleanupError } from "../../../src/domain/providerCleanupError.j
 import { err, ok } from "../../../src/domain/result.js";
 import { scriptCaptureEvidenceFixture } from "../../fixtures/webScriptCapture.js";
 
+it("reports producer cleanup recovery after its owner resolves the error", async () => {
+  const evidence = scriptCaptureEvidenceFixture();
+  const original = new ProviderCleanupError(
+    "fixture-provider",
+    ["producer-resource"],
+    { reason: "original cleanup failure" },
+    { operation: "inspect_web_page", partialObservation: evidence },
+  );
+  const result = await finishAnalysisCommand(
+    async () => err(original),
+    {
+      close: async () => {
+        original.resolveCleanup();
+      },
+    },
+    "fixture-provider",
+    "inspect_web_page",
+  );
+  expect(result).toMatchObject({
+    code: "execution_failure",
+    details: {
+      diagnostics: { reason: "original cleanup failure" },
+      partial_observation: evidence,
+    },
+  });
+  expect(result).not.toHaveProperty("details.resources");
+});
+
 it("preserves producer-owned cleanup failure when service close does not resolve it", async () => {
   const evidence = scriptCaptureEvidenceFixture();
   const failure = new ProviderCleanupError(

@@ -1,7 +1,7 @@
-import { access, stat, writeFile } from "node:fs/promises";
+import { access, open, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -11,7 +11,9 @@ import { ProviderStartupDeadline } from "../../../src/process/ProviderDeadline.j
 import { cleanupOwnedProcessGroup } from "../../../src/process/ProcessOwnership.js";
 import {
   observeOwnedProcessLineage,
+  parseProcessEnvironment,
   systemProcessOwnershipHost,
+  createSystemProcessOwnershipHost,
 } from "../../../src/process/ProcessOwnershipObservation.js";
 import {
   ProviderProcessSupervisor,
@@ -25,6 +27,7 @@ import {
   waitForDetachedProviderChild,
   waitForProviderProcessReady,
 } from "../../fixtures/providerProcess.js";
+import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 
 const processFixturePath = fileURLToPath(
   new URL("../../fixtures/providerProcess.mjs", import.meta.url),
@@ -51,6 +54,32 @@ const waitForPidExit = async (
 afterEach(() => {
   vi.useRealTimers();
 });
+
+it.skipIf(process.platform !== "linux")(
+  "excludes only the exact process-table collector and preserves a matching-command neighbor",
+  async () => {
+    const root = await createTestTempDirectory("rea-process-table-collector-");
+    await writeFile(
+      join(root, "ps"),
+      `#!${process.execPath}
+if (process.argv.slice(2).join(' ') !== '-axo pid=,ppid=,pgid=,uid=,stat=,command=') throw new Error('unexpected inspection arguments');
+const command = 'ps -axo pid=,ppid=,pgid=,uid=,stat=,command=';
+console.log(process.pid + ' ' + process.ppid + ' 100 0 R ' + command);
+console.log('999999 ' + process.ppid + ' 999999 0 S ' + command);
+console.log(process.ppid + ' ${process.ppid} 100 0 S caller');
+`,
+      { mode: 0o755 },
+    );
+    const host = createSystemProcessOwnershipHost("linux", {
+      PATH: `${root}:${dirname(process.execPath)}`,
+    });
+    const rows = await host.listProcesses();
+    expect(rows.map(({ pid }) => pid)).toEqual([999999, process.pid]);
+    expect(rows[0]?.command).toBe(
+      "ps -axo pid=,ppid=,pgid=,uid=,stat=,command=",
+    );
+  },
+);
 
 describe("provider process runtime and wait primitives", () => {
   it("allocates a private runtime root and removes it idempotently", async () => {
@@ -551,6 +580,122 @@ describe("provider startup cancellation", () => {
         expect(prepare).toHaveBeenCalledOnce();
       } finally {
         prepare.mockRestore();
+      }
+    },
+  );
+});
+
+describe("provider process Linux token-read exit races", () => {
+  it.skipIf(process.platform !== "linux").each(["planning", "signaling"])(
+    "settles an owned Linux child exiting at the %s token-read boundary without signaling",
+    async (phase) => {
+      const spawned = await spawnOwnedProviderProcess({
+        command: process.execPath,
+        arguments: [
+          "-e",
+          'process.stdin.once("data", () => process.exit(0)); process.stdout.write("ready\\n");',
+        ],
+        runId: `provider-process-exit-race-${phase}`,
+        expectedCommand: null,
+        stdin: "pipe",
+      });
+      let tokenReads = 0;
+      const signalGroup = vi.fn(systemProcessOwnershipHost.signalGroup);
+      try {
+        await waitForProviderProcessReady(spawned.process);
+        await expect(
+          cleanupOwnedProcessGroup(spawned.ownership, {
+            ...systemProcessOwnershipHost,
+            environment: async (pid) => {
+              const environment =
+                await systemProcessOwnershipHost.environment(pid);
+              expect(environment.REA_PROCESS_RUN_ID).toBe(
+                spawned.ownership.runId,
+              );
+              tokenReads += 1;
+              if (tokenReads === (phase === "planning" ? 1 : 2)) {
+                // Open while live, then read after exit: Linux returns an empty
+                // environment through this real procfs descriptor. No token
+                // value or process-table result is fabricated by the fixture.
+                const file = await open(`/proc/${pid}/environ`);
+                try {
+                  const exited = new Promise<void>((resolve, reject) => {
+                    const onExit = (): void => {
+                      clearTimeout(timer);
+                      resolve();
+                    };
+                    const timer = setTimeout(() => {
+                      spawned.process.off("exit", onExit);
+                      reject(new Error("Owned exit-race fixture did not exit"));
+                    }, 2_000);
+                    spawned.process.once("exit", onExit);
+                  });
+                  spawned.process.stdin?.end("shutdown");
+                  await exited;
+                  const contents = await file.readFile("utf8");
+                  expect(contents).toBe("");
+                  return parseProcessEnvironment(contents);
+                } finally {
+                  await file.close();
+                }
+              }
+              return environment;
+            },
+            signalGroup,
+          }),
+        ).resolves.toEqual({ cleaned: true, signaled: false });
+        expect(tokenReads).toBe(phase === "planning" ? 1 : 2);
+        expect(spawned.process.exitCode).toBe(0);
+        expect(signalGroup).not.toHaveBeenCalled();
+        await expect(
+          cleanupOwnedProcessGroup(spawned.ownership),
+        ).resolves.toEqual({ cleaned: true, signaled: false });
+      } finally {
+        await stopProviderProcessFixture(spawned.process);
+      }
+    },
+  );
+  it.skipIf(process.platform !== "linux").each(["missing", "foreign"])(
+    "refuses cleanup of a real live Linux child with a %s token",
+    async (token) => {
+      const spawned = await spawnOwnedProviderProcess({
+        command: token === "missing" ? "env" : process.execPath,
+        arguments: [
+          ...(token === "missing"
+            ? ["-u", "REA_PROCESS_RUN_ID", process.execPath]
+            : []),
+          processFixturePath,
+          "graceful",
+        ],
+        runId: `provider-process-live-${token}`,
+        expectedCommand: null,
+      });
+      const signalGroup = vi.fn(systemProcessOwnershipHost.signalGroup);
+      try {
+        await waitForProviderProcessReady(spawned.process);
+        const result = await cleanupOwnedProcessGroup(
+          { ...spawned.ownership, runId: "different-expected-run" },
+          { ...systemProcessOwnershipHost, signalGroup },
+        );
+        expect(result).toMatchObject({
+          cleaned: false,
+          failures: [
+            token === "missing"
+              ? {
+                  pid: spawned.ownership.leaderPid,
+                  reason: "environment-unreadable",
+                  diagnostic: "run_token_missing",
+                }
+              : {
+                  pid: spawned.ownership.leaderPid,
+                  reason: "run-token-mismatch",
+                },
+          ],
+        });
+        expect(spawned.process.exitCode).toBeNull();
+        expect(signalGroup).not.toHaveBeenCalled();
+      } finally {
+        await stopProviderProcessFixture(spawned.process);
       }
     },
   );

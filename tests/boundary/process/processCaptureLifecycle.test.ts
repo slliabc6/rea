@@ -153,9 +153,9 @@ itWithCaptureCapability(
         settle_ms: 100,
       }),
     );
-    if (!result.ok) throw result.error;
-    expect(result.value.exit).toMatchObject({ code: 0, reason: "exited" });
-    expect(result.value.filesystem_effects).toContainEqual(
+    const { capture } = captureObservations(result);
+    expect(capture.exit).toMatchObject({ code: 0, reason: "exited" });
+    expect(capture.filesystem_effects).toContainEqual(
       expect.objectContaining({
         path: "root_0:.",
         status: "deleted",
@@ -182,7 +182,7 @@ itWithCaptureCapability(
       return wallReads === 1 ? wallStart : wallStart - 60_000 + wallReads;
     });
     const controller = new AbortController();
-    const fallback = setTimeout(() => controller.abort(), 1_500);
+    let fallback: ReturnType<typeof setTimeout> | undefined;
     try {
       const result = await captureProcessScenario(
         parseProcessScenario({
@@ -193,10 +193,23 @@ itWithCaptureCapability(
           idle_timeout_ms: 5_000,
         }),
         controller.signal,
+        process.platform,
+        process.env,
+        undefined,
+        undefined,
+        {
+          async report(update) {
+            if (update.phase === "running")
+              fallback ??= setTimeout(() => controller.abort(), 1_500);
+            // Bound the workload deadline, not baseline preparation or final
+            // resource cleanup. A broken deadline never reaches settlement.
+            if (update.phase === "settling" || update.phase === "cleanup")
+              clearTimeout(fallback);
+          },
+        },
       );
-      expect(result.ok).toBe(true);
-      if (!result.ok) throw result.error;
-      expect(result.value.exit.reason).toBe("timeout");
+      const { capture } = captureObservations(result);
+      expect(capture.exit.reason).toBe("timeout");
     } finally {
       clearTimeout(fallback);
       now.mockRestore();
@@ -232,26 +245,25 @@ itWithCaptureCapability(
           },
         },
       );
-      expect(result.ok).toBe(true);
-      if (!result.ok) throw result.error;
-      expect(result.value.frames.length).toBeGreaterThan(0);
-      expect(Date.parse(result.value.manifest.completed_at)).toBeLessThan(
-        Date.parse(result.value.manifest.started_at),
+      const { capture } = captureObservations(result);
+      expect(capture.frames.length).toBeGreaterThan(0);
+      expect(Date.parse(capture.manifest.completed_at)).toBeLessThan(
+        Date.parse(capture.manifest.started_at),
       );
-      expect(result.value.limitations).toContain(
+      expect(capture.limitations).toContain(
         "Wall-clock completion time precedes start time; elapsed capture timing is recorded separately and remains monotonic.",
       );
       expect(
-        result.value.frames.map(({ at_ms }) => at_ms),
+        capture.frames.map(({ at_ms }) => at_ms),
         "capture-relative frame times stay ordered and nonnegative",
       ).toEqual(
-        result.value.frames
+        capture.frames
           .map(({ at_ms }) => at_ms)
           .sort((left, right) => left - right),
       );
-      expect(result.value.frames.every(({ at_ms }) => at_ms >= 0)).toBe(true);
-      expect(result.value.exit.reason).toBe("exited");
-      expect(result.value.settlement.elapsed_ms).toBeGreaterThan(0);
+      expect(capture.frames.every(({ at_ms }) => at_ms >= 0)).toBe(true);
+      expect(capture.exit.reason).toBe("exited");
+      expect(capture.settlement.elapsed_ms).toBeGreaterThan(0);
     } finally {
       vi.useRealTimers();
     }

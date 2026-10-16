@@ -48,10 +48,9 @@ const expectHostCleanupReport = (report: {
     throw new Error("cleanup report omitted reason");
   const category =
     process.platform === "linux"
-      ? "environment_errno_(?:EACCES|EPERM)"
-      : "environment_unavailable";
-  const candidate =
-    "[1-9][0-9]*=(?:environment_unavailable|environment_errno_(?:EACCES|EPERM))";
+      ? "(?:run_token_missing|environment_errno_(?:EACCES|EPERM))"
+      : "(?:run_token_missing|environment_unavailable)";
+  const candidate = `[1-9][0-9]*=${category}`;
   expect(reason).toMatch(
     new RegExp(
       `^process ownership token could not be read for [1-9][0-9]* live process\\(es\\): ` +
@@ -68,7 +67,7 @@ const expectHostCleanupReport = (report: {
   });
 };
 
-/** Permit only the host ownership-token cleanup flake seen by real captures. */
+/** Preserve missing/unreadable-token outcomes seen by real captures as unverified. */
 export const expectUnverifiedHostCleanup = (
   error: ProcessCaptureError,
 ): void => {
