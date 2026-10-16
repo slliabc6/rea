@@ -1,6 +1,7 @@
 import type { OptionalProviderLoadResult } from "../application/OptionalObservationProviders.js";
 
 export interface RuntimeDependencies {
+  readonly captureShutdown?: (shutdown: () => Promise<void>) => void;
   readonly env: NodeJS.ProcessEnv;
   readonly serve: typeof import("@modelcontextprotocol/server/stdio").serveStdio;
   readonly writeStderr: (text: string) => void;

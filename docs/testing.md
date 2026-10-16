@@ -47,6 +47,15 @@ it or select another revision.
 
 Source typechecking needs no compiled runtime or generated test metadata.
 `npm run build:cached` compiles the CLI/MCP runtime and its packaged skill.
+The build also records `dist/mcp-catalog.json` from the canonical SDK
+registrations and binds it to the runtime with a SHA-256 digest. This is a
+runtime artifact, separate from the test catalog below. Default target-free
+MCP startup serves its schemas without constructing analysis validators;
+the first tool or guided-workflow request materializes the canonical runtime
+on that same SDK server. Initial-target and non-default schema profiles keep
+the eager path. Compare memory both after discovery and after a completed
+request; report diagnostic GC separately from normal resident memory.
+
 Turbo's strict task environment preserves caller-selected `GOMAXPROCS`,
 `GOMEMLIMIT`, and `UV_THREADPOOL_SIZE` for resource-constrained builds and
 checks. These execution controls do not change artifact content, so changing

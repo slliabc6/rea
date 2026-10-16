@@ -60,10 +60,13 @@ export const startMcpTransport = async (
     );
   }
   const androidProviders: AndroidAnalysisPort[] = [];
-  const servers = new Set<ReturnType<typeof createServer>>();
+  const servers = new Map<
+    ReturnType<typeof createServer>,
+    () => Promise<void>
+  >();
   const closeServers = async (): Promise<void> => {
     const results = await Promise.allSettled(
-      [...servers].map((server) => server.close()),
+      [...servers.values()].map((close) => close()),
     );
     const failures = results.flatMap((result) =>
       result.status === "rejected" ? [result.reason] : [],
@@ -128,12 +131,13 @@ export const startMcpTransport = async (
           },
         );
         // The SDK can discard a server even when its provider cleanup failed.
-        servers.add(server);
         const closeServer = server.close.bind(server);
-        server.close = async () => {
+        const close = async () => {
           await closeServer();
           servers.delete(server);
         };
+        servers.set(server, close);
+        server.close = close;
         return server;
       },
       {
