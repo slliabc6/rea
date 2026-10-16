@@ -79,12 +79,25 @@ type ReferenceEdge = FunctionSnapshot["dossier"]["outgoing_references"][number];
  * only by its address, which names one location only within one artifact;
  * across artifacts it stays unknown (null).
  */
+/**
+ * A named endpoint survives relocation. Within one artifact the address
+ * identifies the target and a resolved name is supplementary, so both are kept;
+ * across artifacts an address names nothing, so only a resolved name survives
+ * and an unresolved endpoint stays unknown (null).
+ */
 const referenceEndpoint = (
   procedure: ReferenceEdge["source_procedure"],
   address: string,
   sameArtifact: boolean,
-): string | { readonly address: string } | null =>
-  procedure !== null ? procedure.name : sameArtifact ? { address } : null;
+):
+  | { readonly address: string; readonly name: string | null }
+  | { readonly name: string }
+  | null =>
+  sameArtifact
+    ? { address, name: procedure?.name ?? null }
+    : procedure === null
+      ? null
+      : { name: procedure.name };
 
 export const referenceProjection = (
   snapshot: FunctionSnapshot,
@@ -130,6 +143,8 @@ export const referenceKindProjection = (
     })),
   ];
   if (edges.some(({ edge }) => !edge.kind.available)) return null;
+  // Endpoint identity is compared on its own; embedding it here would let a
+  // named-versus-unnamed asymmetry decide the edge-semantics comparison.
   return sorted(
     edges.map(({ direction, edge }) => {
       if (!edge.kind.available)
@@ -138,16 +153,6 @@ export const referenceKindProjection = (
         );
       return {
         direction,
-        source: referenceEndpoint(
-          edge.source_procedure,
-          edge.source_address,
-          sameArtifact,
-        ),
-        target: referenceEndpoint(
-          edge.target_procedure,
-          edge.target_address,
-          sameArtifact,
-        ),
         type: edge.kind.type,
         flow: edge.kind.flow,
         call: edge.kind.call,
@@ -287,7 +292,8 @@ const swiftLiteralSites = (snapshot: FunctionSnapshot) => {
   return { values, complete };
 };
 
-export const sorted = (values: readonly unknown[]): readonly unknown[] =>
+/** Canonically order values by their JSON, preserving their inferred type. */
+export const sorted = <T>(values: readonly T[]): readonly T[] =>
   values
     .map((value) => ({
       value,

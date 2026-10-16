@@ -1327,4 +1327,72 @@ describe("function comparison unnamed reference endpoints", () => {
       ).dimensions.find(({ dimension }) => dimension === "references"),
     ).toMatchObject({ status: "changed" });
   });
+
+  it("does not report a change when one record names the target and the other does not", () => {
+    const named = dossierWithReference("0x1000", "call");
+    const unnamed = functionDossierSchema.parse({
+      ...named,
+      outgoing_references: [
+        { ...named.outgoing_references[0], target_procedure: null },
+      ],
+    });
+    const reference = (digits: readonly [string, string]) =>
+      compareFunctions(
+        observe(digits[0] ?? "a", named),
+        observe(digits[1] ?? "b", unnamed),
+      ).dimensions.find(({ dimension }) => dimension === "references");
+    // Across artifacts a resolved target against an unresolved one is a
+    // knowledge asymmetry, not a differing endpoint.
+    expect(reference(["a", "b"])).toMatchObject({ status: "unknown" });
+    expect(reference(["b", "a"])).toMatchObject({ status: "unknown" });
+    // Inside one artifact the address identifies the target and the name is
+    // supplementary, so the same address agrees whether or not it was resolved.
+    expect(reference(["a", "a"])).toMatchObject({ status: "unchanged" });
+  });
+
+  it("keeps a real endpoint difference beside a named and an unnamed target", () => {
+    const named = dossierWithReference("0x1000", "call");
+    const unnamed = functionDossierSchema.parse({
+      ...named,
+      outgoing_references: [
+        { ...named.outgoing_references[0], target_procedure: null },
+      ],
+    });
+    const reference = compareFunctions(
+      observe("a", named),
+      observe(
+        "a",
+        functionDossierSchema.parse({
+          ...unnamed,
+          outgoing_references: [
+            {
+              ...unnamed.outgoing_references[0],
+              target_address: "0x1ff0",
+            },
+          ],
+        }),
+      ),
+    ).dimensions.find(({ dimension }) => dimension === "references");
+    // The addresses differ inside one artifact, so a known endpoint does differ.
+    expect(reference).toMatchObject({ status: "changed" });
+  });
+
+  it("keeps different named targets a change", () => {
+    const named = (name: string) =>
+      functionDossierSchema.parse({
+        ...dossierWithReference("0x1000", "call"),
+        outgoing_references: [
+          {
+            ...dossierWithReference("0x1000", "call").outgoing_references[0],
+            target_procedure: procedure("0x1010", name),
+          },
+        ],
+      });
+    expect(
+      compareFunctions(
+        observe("a", named("first")),
+        observe("b", named("second")),
+      ).dimensions.find(({ dimension }) => dimension === "references"),
+    ).toMatchObject({ status: "changed" });
+  });
 });

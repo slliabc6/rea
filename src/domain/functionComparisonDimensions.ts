@@ -261,6 +261,59 @@ const hasUnnamedEndpoint = (snapshot: FunctionSnapshot): boolean =>
     (edge) => edge.source_procedure === null || edge.target_procedure === null,
   );
 
+/** A projected endpoint; see `referenceEndpoint` for what identifies a target. */
+type ReferenceEndpoint =
+  | { readonly address: string; readonly name: string | null }
+  | { readonly name: string }
+  | null;
+
+type EndpointComparison = "equal" | "changed" | "asymmetric";
+
+/**
+ * Compare two endpoints. An endpoint the other record leaves unresolved is a
+ * knowledge asymmetry rather than a difference: no known endpoint differs, and
+ * equality cannot be established either. Within one artifact the address
+ * identifies the target and a resolved name is supplementary, so a named
+ * endpoint and an unnamed one at the same address agree.
+ */
+const compareEndpoint = (
+  left: ReferenceEndpoint,
+  right: ReferenceEndpoint,
+): EndpointComparison => {
+  if (left === null || right === null) return "asymmetric";
+  if ("address" in left && "address" in right)
+    return left.address === right.address ? "equal" : "changed";
+  if ("address" in left || "address" in right) return "asymmetric";
+  return left.name === right.name ? "equal" : "changed";
+};
+
+type ProjectedReference = {
+  readonly direction: string;
+  readonly source: ReferenceEndpoint;
+  readonly target: ReferenceEndpoint;
+};
+
+/** Compare projected endpoint lists pairwise, in their canonical order. */
+const compareEndpointLists = (
+  left: readonly ProjectedReference[],
+  right: readonly ProjectedReference[],
+): "equal" | "changed" | "asymmetric" => {
+  if (left.length !== right.length) return "changed";
+  let asymmetric = false;
+  for (let index = 0; index < left.length; index += 1) {
+    const leftEdge = left[index];
+    const rightEdge = right[index];
+    if (leftEdge === undefined || rightEdge === undefined) return "changed";
+    if (leftEdge.direction !== rightEdge.direction) return "changed";
+    for (const side of ["source", "target"] as const) {
+      const outcome = compareEndpoint(leftEdge[side], rightEdge[side]);
+      if (outcome === "changed") return "changed";
+      if (outcome === "asymmetric") asymmetric = true;
+    }
+  }
+  return asymmetric ? "asymmetric" : "equal";
+};
+
 const compareReferences = (
   left: FunctionSnapshot,
   right: FunctionSnapshot,
@@ -277,10 +330,8 @@ const compareReferences = (
       rightProjection,
       context,
     );
-  if (
-    canonicalJson(leftProjection, "Function comparison") !==
-    canonicalJson(rightProjection, "Function comparison")
-  )
+  const endpoints = compareEndpointLists(leftProjection, rightProjection);
+  if (endpoints === "changed")
     return dimensionResult({
       dimension: "references",
       status: "changed",
@@ -304,7 +355,8 @@ const compareReferences = (
       canonicalJson(rightKinds, "Function comparison")
   )
     return compareValues("references", leftKinds, rightKinds, context);
-  // Equal projections with unknown endpoints do not establish equal targets.
+  // Across artifacts an unnamed endpoint has no stable identity at all, so the
+  // endpoint comparison cannot decide the dimension.
   if (!sameArtifact && (hasUnnamedEndpoint(left) || hasUnnamedEndpoint(right)))
     return unresolvedDimension({
       dimension: "references",
@@ -313,6 +365,18 @@ const compareReferences = (
       rightCount: rightProjection.length,
       limitations: [
         "Unnamed reference endpoints have no stable identity across different artifacts, so equal named endpoints do not establish equal references.",
+      ],
+    });
+  // One record resolving an endpoint the other leaves unresolved establishes
+  // neither a difference nor equality.
+  if (endpoints === "asymmetric")
+    return unresolvedDimension({
+      dimension: "references",
+      links: context.links,
+      leftCount: leftProjection.length,
+      rightCount: rightProjection.length,
+      limitations: [
+        "One record resolves a reference endpoint while the other leaves it unresolved, so no known endpoint differs and equal named endpoints do not establish equal references.",
       ],
     });
   if (kindsKnown)
