@@ -34,6 +34,7 @@ import { createTestTempDirectory } from "../../../fixtures/temporaryDirectory.js
 import {
   GhidraFixtureLauncher as FixtureLauncher,
   ghidraFixturePath as fixturePath,
+  ghidraFixtureHost,
 } from "./ghidraClient.fixture.js";
 
 const PROFILE_DIGEST = "a".repeat(64);
@@ -41,8 +42,7 @@ const PROVIDER_VERSION = "12.1.4";
 const TARGET_SHA256 = createHash("sha256")
   .update(readFileSync(fixturePath))
   .digest("hex");
-const HOST_TRANSPORT: GhidraTransportKind =
-  process.platform === "win32" ? "authenticated-loopback-tcp" : "unix-socket";
+const HOST_TRANSPORT: GhidraTransportKind = ghidraFixtureHost.transport;
 
 const preExitedProcessLauncher = (options: {
   readonly output: string;
