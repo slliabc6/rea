@@ -6,8 +6,14 @@ import type {
   JavaScriptSemanticChildProcessSpawn,
 } from "./javascriptSemanticIr.js";
 import { createSemanticCallableIdStack } from "./javascriptSemanticCallableStack.js";
+import { createSemanticExpressionShapeResolver } from "./javascriptSemanticExpressionShapes.js";
+import {
+  resolveLocalCallables,
+  type ResolveLocalCallablesInput,
+} from "./javascriptSemanticCallResolution.js";
 import {
   semanticStaticPropertyName,
+  staticObjectProperty,
   unwrapJavaScriptExpression,
 } from "./javascriptAstValues.js";
 import {
@@ -36,6 +42,12 @@ interface ChildProcessAnalysis {
   readonly childProcessInteractions: readonly JavaScriptSemanticChildProcessInteraction[];
 }
 
+type ChildSpawnContext = Omit<ResolveLocalCallablesInput, "node"> & {
+  readonly expressionShape: ReturnType<
+    typeof createSemanticExpressionShapeResolver
+  >;
+};
+
 interface SpawnCandidate {
   readonly node: t.CallExpression | t.OptionalCallExpression;
   readonly method: JavaScriptSemanticChildProcessSpawn["method"];
@@ -61,8 +73,17 @@ export const collectJavaScriptSemanticChildProcesses = (
   callables: readonly JavaScriptSemanticCallable[],
 ): ChildProcessAnalysis => {
   const candidates = collectSpawns(program, state, callables);
+  const context: ChildSpawnContext = {
+    state,
+    callableById: new Map(
+      callables.map((callable) => [callable.callableId, callable]),
+    ),
+    seenInitializers: new Set(),
+    bindingCache: new WeakMap(),
+    expressionShape: createSemanticExpressionShapeResolver(state),
+  };
   const childProcessSpawns = candidates.map((candidate) =>
-    immutableSpawn(candidate),
+    immutableSpawn(candidate, context),
   );
   return {
     childProcessSpawns,
@@ -124,8 +145,9 @@ const collectSpawns = (
 
 const immutableSpawn = (
   candidate: SpawnCandidate,
+  context: ChildSpawnContext,
 ): JavaScriptSemanticChildProcessSpawn => {
-  const options = spawnOptions(candidate);
+  const { options, argvCount } = spawnArguments(candidate, context);
   const command = dataEffectLiteralString(candidate.node.arguments[0]);
   return {
     processId: spawnId(candidate),
@@ -135,9 +157,9 @@ const immutableSpawn = (
     resultBindingId: candidate.resultBindingId,
     projectedResultBindings: candidate.projectedResultBindings,
     command,
-    argvCount: spawnArgvCount(candidate),
+    argvCount,
     environmentSupplied: objectHasProperty(options, "env"),
-    stdioMode: stdioMode(options),
+    stdioMode: stdioMode(options, candidate.method, context),
     resolution: command === null ? "partial" : "complete",
   };
 };
@@ -301,51 +323,86 @@ const resolveChildCandidates = (
     ? []
     : (spawnsByBinding.get(binding.bindingId) ?? []);
 };
-const spawnOptions = (candidate: SpawnCandidate): t.ObjectExpression | null => {
+const spawnArguments = (
+  candidate: SpawnCandidate,
+  context: ChildSpawnContext,
+): {
+  readonly options: t.Node | undefined;
+  readonly argvCount: number | null;
+} => {
   const args = candidate.node.arguments;
-
-  const value =
-    candidate.method === "exec"
-      ? args[1]
-      : t.isObjectExpression(args[1])
-        ? args[1]
-        : args[2];
-
-  return t.isObjectExpression(value) ? value : null;
+  const second = args[1] && unwrapJavaScriptExpression(args[1]).node;
+  const third = args[2] && unwrapJavaScriptExpression(args[2]).node;
+  const { expressionShape } = context;
+  const argv =
+    candidate.method !== "exec" && t.isArrayExpression(second)
+      ? second
+      : undefined;
+  // Only a proven argv array or nullish placeholder admits third-slot options.
+  // Otherwise the second argument may itself be options, ignoring the third.
+  const options =
+    candidate.method === "exec" || second === undefined
+      ? second
+      : argv !== undefined ||
+          expressionShape.isArray(second) ||
+          expressionShape.isNullish(second)
+        ? third
+        : second;
+  return {
+    options,
+    argvCount:
+      argv !== undefined &&
+      !argv.elements.some((element) => t.isSpreadElement(element))
+        ? argv.elements.length
+        : null,
+  };
 };
-const spawnArgvCount = (candidate: SpawnCandidate): number | null => {
-  if (candidate.method === "exec") return null;
-  const args = candidate.node.arguments[1];
-  return t.isArrayExpression(args) &&
-    !args.elements.some((element) => t.isSpreadElement(element))
-    ? args.elements.length
-    : null;
-};
 
-const objectHasProperty = (
-  object: t.ObjectExpression | null,
-  name: string,
-): boolean => objectProperty(object, name) !== null;
+const objectHasProperty = (object: t.Node | undefined, name: string): boolean =>
+  t.isObjectExpression(object) &&
+  object.properties.some(
+    (property) =>
+      !t.isSpreadElement(property) &&
+      semanticStaticPropertyName(property.key, property.computed) === name,
+  );
 
-const stdioMode = (options: t.ObjectExpression | null): string => {
-  const property = objectProperty(options, "stdio");
-  if (property === null || !t.isObjectProperty(property)) return "default";
-  if (t.isStringLiteral(property.value)) return property.value.value;
-  if (t.isArrayExpression(property.value)) return "array";
+const stdioMode = (
+  options: t.Node | undefined,
+  method: JavaScriptSemanticChildProcessSpawn["method"],
+  context: ChildSpawnContext,
+): string => {
+  if (options === undefined) return "default";
+  const expression = unwrapJavaScriptExpression(options).node;
+  if (
+    context.expressionShape.isNullish(expression) ||
+    ((method === "exec" || method === "execFile") &&
+      isLocalCallback(expression, context))
+  )
+    return "default";
+  const lookup = staticObjectProperty(
+    expression,
+    "stdio",
+    context.expressionShape.isNullish,
+  );
+  if (lookup.status === "missing") return "default";
+  if (lookup.status !== "explicit") return "dynamic";
+  const value = unwrapJavaScriptExpression(lookup.property.value).node;
+  if (context.expressionShape.isNullish(value)) return "default";
+  if (t.isStringLiteral(value)) return value.value;
+  if (t.isArrayExpression(value)) return "array";
   return "dynamic";
 };
 
-const objectProperty = (
-  object: t.ObjectExpression | null,
-  name: string,
-): t.ObjectMethod | t.ObjectProperty | null =>
-  object?.properties.find(
-    (property): property is t.ObjectMethod | t.ObjectProperty =>
-      (t.isObjectMethod(property) || t.isObjectProperty(property)) &&
-      // `{[env]: vars}` has a dynamic key; treating it as `env` would claim
-      // the caller supplied an environment when the real key is unknown.
-      semanticStaticPropertyName(property.key, property.computed) === name,
-  ) ?? null;
+const isLocalCallback = (node: t.Node, context: ChildSpawnContext): boolean => {
+  const resolution = resolveLocalCallables({ ...context, node });
+  return (
+    resolution.complete &&
+    resolution.callableIds.length > 0 &&
+    resolution.callableIds.every((id) =>
+      t.isFunction(context.state.callableNodesById.get(id)),
+    )
+  );
+};
 
 const objectBinding = (
   node: t.Expression | t.Super,

@@ -15,7 +15,6 @@ import {
   collectContextBridgeMembers,
   electronCalleePath,
   electronStaticValue,
-  objectProperty,
 } from "./electronStaticAnalysisValues.js";
 import { compareUnicodeCodePoints } from "../unicodeCodePointOrder.js";
 import { addLocatedFinding } from "./javascriptStaticAnalysisFindings.js";
@@ -27,6 +26,7 @@ import {
 } from "./javascriptStaticAnalysisHelpers.js";
 import {
   semanticStaticPropertyKey,
+  staticObjectProperty,
   unwrapJavaScriptExpression,
 } from "./javascriptAstValues.js";
 import type { JavaScriptFindingContext } from "./javascriptStaticAnalysisState.js";
@@ -53,7 +53,11 @@ const inspectBrowserWindow = (
     argument === undefined
       ? undefined
       : unwrapJavaScriptExpression(argument).node;
-  const collected = collectWindowOptions(context.source, options);
+  const collected = collectWindowOptions(
+    context.source,
+    options,
+    context.isNullishExpression,
+  );
   context.accumulator.unknownFindings += collected.unknown;
   const finding: ElectronBrowserWindowFinding = {
     options_status:
@@ -79,13 +83,18 @@ const inspectBrowserWindow = (
 const collectWindowOptions = (
   source: string,
   options: t.Node | undefined,
+  isNullishExpression: (node: t.Node) => boolean,
 ): {
   readonly status: ElectronBrowserWindowFinding["web_preferences_status"];
   readonly preferences: readonly ElectronWebPreference[];
   readonly preload: ElectronBrowserWindowPreload;
   readonly unknown: number;
 } => {
-  const lookup = objectProperty(options, "webPreferences");
+  const lookup = staticObjectProperty(
+    options,
+    "webPreferences",
+    isNullishExpression,
+  );
   const preferences =
     lookup.status === "explicit"
       ? unwrapJavaScriptExpression(lookup.property.value).node
@@ -97,12 +106,13 @@ const collectWindowOptions = (
       preload: { preload_path: null, preload_resolution_context: null },
       unknown: lookup.status === "missing" ? 0 : 1,
     };
-  return collectWebPreferences(source, preferences);
+  return collectWebPreferences(source, preferences, isNullishExpression);
 };
 
 const collectWebPreferences = (
   source: string,
   object: t.ObjectExpression,
+  isNullishExpression: (node: t.Node) => boolean,
 ): {
   readonly status: "object-literal";
   readonly preferences: readonly ElectronWebPreference[];
@@ -111,7 +121,11 @@ const collectWebPreferences = (
 } => {
   const preferences: ElectronWebPreference[] = [];
   let unknown = 0;
-  const effectivePreload = objectProperty(object, "preload");
+  const effectivePreload = staticObjectProperty(
+    object,
+    "preload",
+    isNullishExpression,
+  );
   const preloadPath =
     effectivePreload.status === "explicit"
       ? staticPath(effectivePreload.property.value)
@@ -228,7 +242,11 @@ const inspectUtilityProcess = (
   const modulePath =
     moduleNode === undefined ? undefined : staticPath(moduleNode);
   const options = argumentNode(node.arguments[2]);
-  const serviceNameProperty = objectProperty(options, "serviceName");
+  const serviceNameProperty = staticObjectProperty(
+    options,
+    "serviceName",
+    context.isNullishExpression,
+  );
   const serviceName =
     serviceNameProperty.status === "explicit"
       ? staticPath(serviceNameProperty.property.value)

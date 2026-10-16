@@ -1,4 +1,5 @@
 import * as t from "@babel/types";
+import { createSemanticExpressionShapeResolver } from "./javascriptSemanticExpressionShapes.js";
 
 import {
   unwrapJavaScriptExpression,
@@ -153,13 +154,18 @@ export const isJavaScriptRpcClientFactory = (node: t.Node): boolean => {
 /** Recover the literal `url` option passed to a documented tRPC HTTP link. */
 const trpcLinkUrl = (
   node: t.CallExpression | t.OptionalCallExpression,
+  isNullishExpression: (node: t.Node) => boolean,
 ): JavaScriptRpcEndpoint | undefined => {
   const name = rpcFactoryName(node.callee);
   const factory = name.slice(name.lastIndexOf(".") + 1);
   if (!TRPC_URL_LINKS.has(factory)) return undefined;
   const options = node.arguments[0];
   if (!t.isObjectExpression(options)) return undefined;
-  const url = semanticFinalObjectStringProperty(options, "url");
+  const url = semanticFinalObjectStringProperty(
+    options,
+    "url",
+    isNullishExpression,
+  );
   return url === undefined
     ? undefined
     : { value: url, mechanism: `trpc:link:${factory}` };
@@ -176,11 +182,12 @@ export const createJavaScriptRpcScan = (
   source: string,
   clientRoots: ReadonlySet<t.Node>,
   index: JavaScriptBindingIndex,
+  expressionShape = createSemanticExpressionShapeResolver(index.bindings),
 ): JavaScriptRpcScan => {
   let marker: boolean | undefined;
   const hasMarker = (): boolean =>
     (marker ??= TRPC_SOURCE_MARKERS.some((value) => source.includes(value)));
-  const graphql = createJavaScriptGraphqlScan(index);
+  const graphql = createJavaScriptGraphqlScan(index, expressionShape);
 
   const procedure = (
     node: t.CallExpression | t.OptionalCallExpression,
@@ -213,7 +220,7 @@ export const createJavaScriptRpcScan = (
   return {
     inspect: (node) => {
       if (t.isCallExpression(node) || t.isOptionalCallExpression(node))
-        return trpcLinkUrl(node) ?? procedure(node);
+        return trpcLinkUrl(node, expressionShape.isNullish) ?? procedure(node);
       return graphql.inspect(node);
     },
     finish: graphql.finish,

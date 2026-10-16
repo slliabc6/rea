@@ -88,14 +88,19 @@ export const semanticStaticPropertyKey = (
   computed: boolean,
 ): string | null => {
   property = unwrapJavaScriptExpression(property).node;
-  if (t.isStringLiteral(property) || t.isNumericLiteral(property))
-    return String(property.value);
-  if (t.isBigIntLiteral(property)) return String(property.value);
   if (
-    t.isUnaryExpression(property, { operator: "-" }) &&
-    t.isBigIntLiteral(property.argument)
+    t.isStringLiteral(property) ||
+    t.isNumericLiteral(property) ||
+    t.isBooleanLiteral(property)
   )
-    return String(-BigInt(property.argument.value));
+    return String(property.value);
+  if (t.isNullLiteral(property)) return "null";
+  if (t.isBigIntLiteral(property)) return String(property.value);
+  if (t.isUnaryExpression(property, { operator: "-" })) {
+    const argument = unwrapJavaScriptExpression(property.argument).node;
+    if (t.isNumericLiteral(argument)) return String(-argument.value);
+    if (t.isBigIntLiteral(argument)) return String(-BigInt(argument.value));
+  }
   if (
     t.isTemplateLiteral(property) &&
     property.expressions.length === 0 &&
@@ -107,27 +112,59 @@ export const semanticStaticPropertyKey = (
   return !computed && t.isIdentifier(property) ? property.name : null;
 };
 
+/** Syntax whose value cannot contribute own properties to an object spread. */
+export const isNullishJavaScriptSyntax = (node: t.Node): boolean => {
+  node = unwrapJavaScriptExpression(node).node;
+  return (
+    t.isNullLiteral(node) || t.isUnaryExpression(node, { operator: "void" })
+  );
+};
+
+/** Find the effective explicit property, preserving unresolved overrides. */
+export const staticObjectProperty = (
+  object: t.Node | undefined,
+  name: string,
+  isNullish?: (node: t.Node) => boolean,
+):
+  | { readonly status: "missing" | "dynamic" }
+  | { readonly status: "explicit"; readonly property: t.ObjectProperty } => {
+  if (object === undefined) return { status: "missing" };
+  if (!t.isObjectExpression(object)) return { status: "dynamic" };
+  for (const property of object.properties.toReversed()) {
+    if (t.isSpreadElement(property)) {
+      if (
+        isNullishJavaScriptSyntax(property.argument) ||
+        isNullish?.(property.argument) === true
+      )
+        continue;
+      return { status: "dynamic" };
+    }
+    const key = semanticStaticPropertyKey(property.key, property.computed);
+    if (key === null) return { status: "dynamic" };
+    if (key !== name) continue;
+    return t.isObjectProperty(property)
+      ? { status: "explicit", property }
+      : { status: "dynamic" };
+  }
+  return { status: "missing" };
+};
+
 /** Later properties own a key; an intervening dynamic write leaves it unknown. */
 export const semanticFinalObjectProperty = (
   node: t.ObjectExpression,
   key: string,
+  isNullish?: (node: t.Node) => boolean,
 ): t.Node | undefined => {
-  for (let index = node.properties.length - 1; index >= 0; index -= 1) {
-    const property = node.properties[index];
-    if (property === undefined || t.isSpreadElement(property)) return undefined;
-    const name = semanticStaticPropertyKey(property.key, property.computed);
-    if (name === null) return undefined;
-    if (name === key)
-      return t.isObjectProperty(property) ? property.value : undefined;
-  }
-  return undefined;
+  const property = staticObjectProperty(node, key, isNullish);
+  return property.status === "explicit" ? property.property.value : undefined;
 };
 
 export const semanticFinalObjectStringProperty = (
   node: t.ObjectExpression,
   key: string,
+  isNullish?: (node: t.Node) => boolean,
 ): string | undefined => {
-  const value = semanticFinalObjectProperty(node, key);
+  const value = semanticFinalObjectProperty(node, key, isNullish);
   return t.isStringLiteral(value) ? value.value : undefined;
 };
 
