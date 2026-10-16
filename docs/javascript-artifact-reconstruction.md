@@ -432,7 +432,13 @@ creation. Arguments follow each actual callable invocation rather than property
 chain depth; rebinding retains the original bound receiver.
 Visibly replaced invocation intrinsics produce unknown effects instead
 of using their former call semantics; captured function aliases retain their
-earlier identity. Unexamined targets remain unresolved. `Reflect.set` examines
+earlier identity. Invocation member reads are checked separately from the
+earlier function capture. An invocation member alias that names no callable
+keeps the call's effects unknown rather than effect-free.
+Comma-expression callees use their final value while
+all preceding expressions remain in the effect traversal. Call effects are
+classified after callee and argument effects have been collected. Unexamined
+targets remain unresolved. `Reflect.set` examines
 its explicit receiver as well as its target, retaining unknown receiver effects.
 Creating an unused binding does not itself mutate an intrinsic. Variable
 redeclarations retain a single unconditional initializer

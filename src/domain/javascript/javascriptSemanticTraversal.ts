@@ -19,6 +19,8 @@ export const traverseJavaScriptAst = (
 export interface JavaScriptAstVisitor {
   /** Omit a child and its subtree without entering or exiting it. */
   readonly skip?: (node: t.Node) => boolean;
+  /** Override child field order while retaining the shared child expansion owner. */
+  readonly childKeys?: (node: t.Node) => readonly string[];
   readonly enter: (
     node: t.Node,
     parent: t.Node | null,
@@ -40,7 +42,12 @@ export function* traverseJavaScriptAstSteps(
   const enter = (node: t.Node, parent: t.Node | null): TraversalFrame => {
     visitor.enter(node, parent, () => [...ancestors]);
     ancestors.push(node);
-    return { node, parent, children: childNodes(node), nextIndex: 0 };
+    return {
+      node,
+      parent,
+      children: childNodes(node, visitor.childKeys?.(node)),
+      nextIndex: 0,
+    };
   };
   const pending = [enter(root, null)];
   let visited = 1;
@@ -84,8 +91,10 @@ interface TraversalFrame {
  * expansion; bespoke `Object.values` / duplicated `childNodes` walkers must
  * not be reintroduced (they diverge on loc/comment fields and ordering).
  */
-export const childNodes = (node: t.Node): t.Node[] => {
-  const keys = javaScriptAstChildKeys(node);
+export const childNodes = (
+  node: t.Node,
+  keys: readonly string[] = javaScriptAstChildKeys(node),
+): t.Node[] => {
   const children: t.Node[] = [];
   for (const key of keys) {
     const value: unknown = Reflect.get(node, key);

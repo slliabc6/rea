@@ -789,13 +789,30 @@ export function* indexJavaScriptElectronIdentitySteps(
     program,
     (node, kind) => {
       if (kind === "opaque-call") return [interop.opaqueMutationPath(node)];
+      // A member expression's value is a captured invocation member when its
+      // object is a provable callable: `change.call` is Function.prototype.call
+      // itself, so `change.call.call = x` writes the
+      // `intrinsic.Function.prototype.call.call` slot. A replaced member's
+      // object value is unknown and yields no provable identity.
+      if (
+        kind === "member" &&
+        (t.isMemberExpression(node) || t.isOptionalMemberExpression(node))
+      ) {
+        const capturedValue = interop.capturedInvocationMember(node);
+        if (capturedValue !== undefined) {
+          return capturedValue.replaced === true
+            ? []
+            : [["intrinsic", "Function", "prototype", capturedValue.key]];
+        }
+      }
       const { root, members } = electronMemberPath(node);
       const exported = kind === "binding" ? undefined : rootExport(root);
       const path =
         exported === undefined
           ? (interop.intrinsicPath(root) ??
             (kind === "member"
-              ? interop.boundIntrinsic(root)?.path
+              ? (interop.boundIntrinsic(root)?.path ??
+                interop.capturedInvocationMemberPath(root))
               : undefined))
           : ["electron", ...exported];
       return path === undefined ? [] : [[...path, ...members]];
@@ -803,10 +820,11 @@ export function* indexJavaScriptElectronIdentitySteps(
     interop.intrinsicInvocation,
     interop.staticString,
     interop.isFreshObject,
-    (node, path) => {
+    (node, path, kind) => {
       if (path[0] === "electron") writes.retain(path);
-      else interop.retainWrite(node, path);
+      else interop.retainWrite(node, path, kind);
     },
+    interop.observeEvaluation,
   );
   collectedWrites = true;
   const intactExport = (path: readonly (string | null)[]): boolean =>

@@ -45,6 +45,10 @@ const INTRINSIC_MUTATIONS = [
     "deep-apply.cjs",
     'Function.prototype.apply.apply(Object.defineProperty,[null,[Object,"create",{value:customCreate}]]);',
   ],
+  [
+    "sequence.cjs",
+    '(0,Object.defineProperty)(Object,"create",{value:customCreate});',
+  ],
 ] as const;
 
 const writePoisonedModules = async (root: string): Promise<void> => {
@@ -89,6 +93,7 @@ cliTest.for(["CLI", "stdio MCP"] as const)(
       function hoistedFunction() {}
       const captured = Object.defineProperty;
       Object.defineProperty = custom;
+      captured.call(null,metadata,"captured",{value:1});
       ${ROLLDOWN_MODULE_INTEROP.replace("__defProp = Object.defineProperty", "__defProp = captured")}
       let electron = require("electron");
       electron = __toESM(electron, 1);
@@ -121,6 +126,7 @@ cliTest.for(["CLI", "stdio MCP"] as const)(
       require("./receiver.cjs");
       require("./deep-call.cjs");
       require("./deep-apply.cjs");
+      require("./sequence.cjs");
       throw new Error("must not execute main");
     `;
     await writeFile(join(root, "main.cjs"), source);
@@ -147,7 +153,7 @@ cliTest.for(["CLI", "stdio MCP"] as const)(
       preload_entrypoints: 1,
     });
     expect(result.statistics.parse_failures).toBe(0);
-    expect(result.statistics.parsed_javascript_files).toBe(12);
+    expect(result.statistics.parsed_javascript_files).toBe(13);
     const windows = result.graph.nodes.filter(
       ({ kind }) => kind === "browser-window",
     );

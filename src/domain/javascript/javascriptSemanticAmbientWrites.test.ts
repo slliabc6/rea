@@ -68,6 +68,18 @@ alias.unrelated = replacement;`,
 const selected = flag ? copy : copy; selected.URL = replacement;`,
     specifier: "./worker.js",
   },
+  {
+    name: "a destructured write through a reassigned local alias",
+    setup: `let alias = globalThis; alias = {};
+[alias.URL] = [replacement];`,
+    specifier: "./worker.js",
+  },
+  {
+    name: "a destructured write while the alias still points at globalThis",
+    setup: `let alias = globalThis;
+[alias.URL] = [replacement];`,
+    specifier: null,
+  },
 ])("preserves $name", ({ setup, specifier }) => {
   const source = `import { Worker } from "node:worker_threads";
 ${setup}

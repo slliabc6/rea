@@ -21,6 +21,19 @@ const BLOCK_MODULE_INTEROP = ROLLDOWN_MODULE_INTEROP.replace(
   .replace("  return to;", "  }\n  return to;");
 
 describe("Electron module interop identity", () => {
+  it("does not apply a nested bound prefix twice", () => {
+    const analysis = analyzeJavaScriptStaticSource(`
+      const make = Function.prototype.bind.bind(Object.defineProperty, null);
+      const decorate = make(metadata, "x");
+      decorate({value: 1});
+      const electron = require("electron");
+      new electron.BrowserWindow({webPreferences:{preload:"./preload.js"}});
+    `);
+    expect(analysis.electron.browser_windows).toMatchObject([
+      { preload_path: "./preload.js" },
+    ]);
+  });
+
   it("preserves named APIs through the released Rolldown namespace conversion", () => {
     const analysis = analyzeJavaScriptStaticSource(`${ROLLDOWN_MODULE_INTEROP}
       ${IMPORT} ${WRAP} ${WINDOW}
@@ -552,6 +565,10 @@ describe("Electron module interop generic invocations", () => {
     'Function.prototype.apply.apply(Object.defineProperty,[null,[Object,"create",{value:customCreate}]]);',
     'const change = Object.defineProperty.call.bind(Object.defineProperty); change(null,Object,"create",{value:customCreate});',
     'const change = Function.prototype.call.call.bind(Object.defineProperty,null,Object,"create"); change({value:customCreate});',
+    'const bind = Object.defineProperty.bind; const change = bind.call(Object.defineProperty,null,Object,"create"); change({value:customCreate});',
+    'const change = Object.defineProperty.bind(null,Object,"create"); const invoke = change.call; invoke.call(change,null,{value:customCreate});',
+    'const args = [null,Object,"create"]; const make = Function.prototype.bind.bind(Object.defineProperty); const change = make.apply(null,args); change({value:customCreate});',
+    'const poison = (receiver, values) => { Object.create = customCreate; }; const metadata = {}; Object.assign(Function.prototype.apply, {apply: poison}); Object.defineProperty.apply.apply(Object.defineProperty, [null, [metadata, "x", {value:1}]]);',
   ])("follows the callable receiver of a generic invocation: %s", (write) => {
     expect(
       analyzeJavaScriptStaticSource(
@@ -615,6 +632,12 @@ describe("Electron module interop bound mutators", () => {
     'Reflect.set({},"create",...valuesAndReceivers);',
     "Reflect.set({},...keysValuesAndReceivers);",
     'Reflect.set({},"create",customCreate,receiver);',
+    'const change = Object.defineProperty.call; change(null,Object,"create",{value:customCreate});',
+    'const {apply:change} = Object.defineProperty; change(null,[Object,"create",{value:customCreate}]);',
+    'const change = Reflect.apply.call; change(null,Object.defineProperty,null,[Object,"create",{value:customCreate}]);',
+    '(0, Object.defineProperty)(Object,"create",{value:customCreate});',
+    'const change = Object.defineProperty.bind(null,Object,"create"); (0, change)({value:customCreate});',
+    '(0, Reflect.apply)(Object.defineProperty,null,[Object,"create",{value:customCreate}]);',
   ])("rejects intrinsic writes through a bound mutator: %s", (write) => {
     expect(
       analyzeJavaScriptStaticSource(
@@ -641,12 +664,23 @@ describe("Electron module interop bound mutators", () => {
     'const {apply:change} = Object.defineProperty; change.call(Object.defineProperty,null,[metadata,"x",{value:1}]);',
     'Reflect.set(metadata,"x",1,{});',
     'const receiver = {}; Reflect.set({},"x",1,receiver);',
+    '(0, Object.defineProperty)(metadata,"x",{value:1});',
   ])("keeps a fresh bound target or unused binding separate: %s", (write) => {
     expect(
       analyzeJavaScriptStaticSource(
         `const metadata = {}; ${write}\n${ROLLDOWN_MODULE_INTEROP}\n${IMPORT} ${WRAP} ${WINDOW}`,
       ).electron.browser_windows,
     ).toHaveLength(1);
+  });
+
+  it("does not treat an unrelated call property as Function.prototype.call", () => {
+    const analysis = analyzeJavaScriptStaticSource(`
+      const custom = {call: () => {}};
+      Reflect.apply(custom.call, Object.defineProperty, [null, Object, "create", {value: replacement}]);
+      ${ROLLDOWN_MODULE_INTEROP}
+      ${IMPORT} ${WRAP} ${WINDOW}
+    `);
+    expect(analysis.electron.browser_windows).toHaveLength(1);
   });
 });
 

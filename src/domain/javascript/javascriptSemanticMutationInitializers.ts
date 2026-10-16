@@ -416,7 +416,8 @@ const computeDirectMutationPosition = (
   node: t.Node,
   parents: WeakMap<t.Node, t.Node>,
 ): StatementPosition | null => {
-  if (t.isForOfStatement(node)) return statementPosition(node, parents);
+  if (t.isForOfStatement(node) || t.isForInStatement(node))
+    return statementPosition(node, parents);
   if (t.isVariableDeclarator(node)) {
     const declaration = parents.get(node);
     return t.isVariableDeclaration(declaration)
