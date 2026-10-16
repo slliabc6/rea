@@ -79,6 +79,42 @@ execution or network acquisition is implied, and WAT is decoded representation.
 
 ## Native targets
 
+For a large completed `analyze_function` dossier, retain its Evidence ID and read
+`inspect_analysis_view` with `source: {kind: "retained-evidence", evidence_id: ID}`
+and `view: {kind: "native", facet: "pseudocode", offset: 0, limit: 4096}`.
+First inspect the returned Evidence envelope's `normalized_result.item`. An
+unavailable facet, including pseudocode, returns a singleton status object
+(`{available: false, reason}`) instead of text or rows. Unrecorded optional
+collections return that status too. Preserve the status and reason as an explicit
+unknown. For available pseudocode, follow `normalized_result.coverage.next_offset`;
+text offsets and limits count UTF-16 code units, not bytes or lines. Available
+assembly and recorded collection data use row pages. Singleton facets
+`procedure`, `native_api`, and `value_flow_summary` require offset 0. Paging
+reads retained evidence without repeating decompilation.
+
+This native view requires function-dossier Evidence; a standalone
+`procedure_pseudo_code` string or `batch_decompile` result is not interchangeable
+with that dossier. For those results, preserve the complete Evidence or export
+an evidence bundle. Do not repeat successful analysis solely to obtain a smaller
+reply. Current `batch_decompile` returns full per-item pseudocode and has no
+`detail: "summary"` input.
+
+If decompilation times out, distinguish the client's request deadline from
+Ghidra startup and analysis. After cancellation of an active Ghidra request,
+successful cleanup discards the ephemeral database; the next uncached provider
+query imports the selected target again. While the binary session remains open
+without `close_binary`, reuse retained successful Evidence and matching snapshot
+entries where available. Incomplete cleanup retains the owned process/runtime
+and blocks fresh import. Export needed Evidence before `close_binary`: closing
+clears session-retained Evidence IDs and snapshot cache entries even when cleanup
+fails. Check the close result and retry after addressing `cleanup_incomplete`
+before reopening the target; do not reuse cleared IDs after close. Preserved
+complete dossier Evidence can instead be supplied through the view's inline
+source. A new uncached query can still incur cold import. Increasing the
+startup allowance does not extend a client's tool-call deadline, and a timeout
+does not produce completed pseudocode. See the
+[deadline and recovery guide](https://github.com/morluto/rea/blob/main/docs/mcp-contracts.md#ghidra-first-query-deadlines-and-recovery).
+
 After `open_binary`, use focused search, procedure, or function tools directly.
 Use `binary_overview` when target metadata or inventory context helps answer the
 question. Prefer literal search, names, decompilation, callers, callees, and
