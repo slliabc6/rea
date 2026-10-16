@@ -74,16 +74,31 @@ const peResourcesFailurePrimary = (
   if (signal?.aborted) return new AnalysisCancelledError(operation, { cause });
 
   if (cause instanceof ArtifactReaderFailure) {
+    // An input byte budget is a file-size bound, not a memory constraint, and
+    // an entry budget is a capacity bound. Report what was actually exceeded.
     if (cause.reason === "limit")
       return new AnalysisResourceConstraintError(
         operation,
-        "memory",
+        cause.boundary ?? "memory",
         cause.message,
         {
           max_file_bytes: input.max_file_bytes,
           max_entries: input.max_entries,
         },
-        { cause },
+        {
+          cause,
+          // Both bounds are caller-selected and deterministic for the same
+          // input, so waiting for an active analysis cannot help.
+          ...(cause.boundary === undefined || cause.boundary === "memory"
+            ? {}
+            : {
+                retryable: false,
+                remediationAction:
+                  cause.boundary === "file-size"
+                    ? `Raise max_file_bytes above ${String(input.max_file_bytes)} bytes or select a smaller artifact; the limit is the caller-selected input read budget.`
+                    : `Raise max_entries above ${String(input.max_entries)} or select a smaller artifact; the limit is the caller-selected resource directory entry budget.`,
+              }),
+        },
       );
     if (cause.reason === "path" || cause.reason === "format")
       return new AnalysisInputError(operation, { cause }, [
