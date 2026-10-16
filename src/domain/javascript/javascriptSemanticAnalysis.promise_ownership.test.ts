@@ -2,6 +2,25 @@ import { expect, it } from "vitest";
 
 import { analyzeJavaScriptSemantics } from "./javascriptSemanticAnalysis.js";
 
+it.each(["pending", "(0, pending)"])(
+  "links an awaited stable result through %s",
+  (value) => {
+    const ir = analyzeJavaScriptSemantics(
+      `const pending = Promise.resolve(1); const alias = ${value}; await alias;`,
+    );
+    const producer = ir.promiseOperations.find(
+      ({ method }) => method === "resolve",
+    );
+    if (producer === undefined) throw new Error("Missing promise producer");
+    expect(
+      ir.promiseOperations.find(({ method }) => method === "await"),
+    ).toMatchObject({
+      sourcePromiseIds: [producer.promiseId],
+      sourceResolution: "complete",
+    });
+  },
+);
+
 it.each([
   {
     source: "const value = (Promise.resolve(1) as Promise<number>);",

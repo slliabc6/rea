@@ -4,9 +4,133 @@ import {
   readExactJavaScriptLiteral,
   semanticStaticPropertyKey,
   unwrapJavaScriptExpression,
+  javaScriptClassField,
 } from "./javascriptAstValues.js";
 
 const preserveGrouping = { stopAtParentheses: true } as const;
+
+/** One lexical activation and the evaluation point it contributes to a read. */
+export interface SemanticExecutionFrame {
+  readonly owner: t.Node;
+  readonly point: t.Node;
+}
+
+/** Compare initialization only in the nearest shared, proven activation. */
+export const semanticInitializerPrecedesRead = ({
+  initializer,
+  read,
+  bindingNode,
+  parents,
+  initializerContexts,
+  readContexts,
+}: {
+  readonly initializer: t.Node;
+  readonly read: t.Node;
+  readonly bindingNode?: t.Node;
+  readonly parents: WeakMap<t.Node, t.Node>;
+  readonly initializerContexts: readonly SemanticExecutionFrame[];
+  readonly readContexts: readonly SemanticExecutionFrame[];
+}): boolean | undefined => {
+  let current: t.Node | undefined = initializer;
+  while (
+    current !== undefined &&
+    !t.isFunction(current) &&
+    !t.isProgram(current)
+  ) {
+    if (t.isSwitchCase(current)) {
+      let ancestor: t.Node | undefined = read;
+      while (ancestor !== undefined && ancestor !== current)
+        ancestor = parents.get(ancestor);
+      if (ancestor === undefined) return false;
+    }
+    current = parents.get(current);
+  }
+  const shared = readContexts.find(({ owner }) =>
+    initializerContexts.some((frame) => frame.owner === owner),
+  );
+  if (shared === undefined) return undefined;
+  const patternOrder =
+    bindingNode === undefined
+      ? undefined
+      : semanticPatternInitializationPrecedesRead(bindingNode, read, parents);
+  if (patternOrder !== undefined) return patternOrder;
+  return !initializerContexts.some(
+    (before) =>
+      before.owner === shared.owner &&
+      readContexts.some(
+        (after) =>
+          after.owner === shared.owner &&
+          (before.point.end ?? Infinity) >= (after.point.start ?? -1),
+      ),
+  );
+};
+
+/** Order a binding event against evaluation in the same declaration pattern. */
+export const semanticPatternInitializationPrecedesRead = (
+  binding: t.Node,
+  read: t.Node,
+  parents: WeakMap<t.Node, t.Node>,
+): boolean | undefined => {
+  if (!t.isIdentifier(binding) || t.isVariableDeclarator(parents.get(binding)))
+    return undefined;
+  const path = new Map<t.Node, t.Node>();
+  let child: t.Node = binding;
+  let declarator: t.VariableDeclarator | undefined;
+  for (;;) {
+    const parent = parents.get(child);
+    if (parent === undefined || t.isFunction(parent) || t.isProgram(parent))
+      break;
+    path.set(parent, child);
+    if (t.isVariableDeclarator(parent)) {
+      if (parent.id !== child) return undefined;
+      declarator = parent;
+      break;
+    }
+    child = parent;
+  }
+  if (declarator === undefined) return undefined;
+  child = read;
+  for (;;) {
+    const parent = parents.get(child);
+    if (parent === undefined) return undefined;
+    const boundChild = path.get(parent);
+    if (boundChild !== undefined) {
+      const siblings: readonly (t.Node | null)[] | undefined =
+        t.isObjectPattern(parent)
+          ? parent.properties
+          : t.isArrayPattern(parent)
+            ? parent.elements
+            : undefined;
+      if (siblings !== undefined) {
+        const before = siblings.indexOf(boundChild);
+        const after = siblings.indexOf(child);
+        return before >= 0 && after >= 0 ? before < after : undefined;
+      }
+      // RHS, computed key and a selected default all precede their own binding.
+      if (
+        t.isVariableDeclarator(parent) ||
+        t.isAssignmentPattern(parent) ||
+        t.isObjectProperty(parent)
+      )
+        return false;
+      return undefined;
+    }
+    child = parent;
+  }
+};
+
+/** Whether call arguments or an optional member key may be short-circuited. */
+export const javaScriptOptionalOperandsMayBeSkipped = (
+  node:
+    | t.CallExpression
+    | t.OptionalCallExpression
+    | t.OptionalMemberExpression,
+): boolean =>
+  ((t.isOptionalCallExpression(node) || t.isOptionalMemberExpression(node)) &&
+    node.optional) ||
+  optionalChainMayShortCircuit(
+    t.isOptionalMemberExpression(node) ? node.object : node.callee,
+  );
 
 export type JavaScriptSemanticIterationCardinality =
   | "empty"
@@ -70,11 +194,7 @@ export const delayedInstanceFieldValue = (
   parent: t.Node | undefined,
   child: t.Node | undefined,
 ): boolean =>
-  (t.isClassProperty(parent) ||
-    t.isClassPrivateProperty(parent) ||
-    t.isClassAccessorProperty(parent)) &&
-  !parent.static &&
-  parent.value === child;
+  javaScriptClassField(parent) && !parent.static && parent.value === child;
 
 /** Shared branch facts for binding writes and their possible execution positions. */
 export const semanticBranchMayBeSkipped = (
@@ -104,14 +224,13 @@ export const semanticBranchMayBeSkipped = (
   if (t.isOptionalCallExpression(parent) || t.isCallExpression(parent))
     return (
       parent.arguments.includes(child as t.Expression) &&
-      ((t.isOptionalCallExpression(parent) && parent.optional) ||
-        optionalChainMayShortCircuit(parent.callee))
+      javaScriptOptionalOperandsMayBeSkipped(parent)
     );
   if (t.isOptionalMemberExpression(parent))
     return (
       parent.computed &&
       child === parent.property &&
-      (parent.optional || optionalChainMayShortCircuit(parent.object))
+      javaScriptOptionalOperandsMayBeSkipped(parent)
     );
   return false;
 };
