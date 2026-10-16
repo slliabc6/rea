@@ -207,6 +207,14 @@ npm ci
 npm run check:fast
 ```
 
+With Nix, `nix-shell` provides the pinned Node.js and npm, Python, Git, procps
+and util-linux, and runs `npm ci` when `node_modules` is missing.
+`nix-shell --arg withProviders true` additionally provides JDK 21, Ghidra 12.1,
+the pinned JADX bridge JAR, Binwalk and Unblob, and exports `GHIDRA_INSTALL_DIR`,
+`JAVA_HOME`, `REA_JADX_MCP_JAR`, `REA_BINWALK_COMMAND`, `REA_UNBLOB_COMMAND` and
+`REA_FIRMWARE_PRLIMIT_COMMAND`. The shell is optional development tooling; it
+does not change REA's bring-your-own provider policy.
+
 `npm ci` installs the exact dependencies and prepares the Husky hooks without
 building the project. Run `npm run build:cached` when you need the standalone
 CLI or MCP server; it compiles the runtime and bundles the authored skill.
